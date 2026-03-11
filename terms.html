@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Terms of Use - Neuromax</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+
+    <!-- Header / Navigation -->
+    <header>
+        <div class="container nav-container">
+            <a href="index.html" class="logo">NEUROMAX</a>
+            <div class="menu-toggle" id="mobile-menu">
+                <span></span>
+                <span></span>
+                <span></span>
+            </div>
+            <nav class="nav-links" id="nav-links">
+                <a href="index.html">Home</a>
+                <a href="about.html">About</a>
+                <a href="support.html">Support</a>
+                <a href="refund.html">Refund Policy</a>
+                <a href="privacy.html">Privacy Policy</a>
+                <a href="terms.html" class="active">Terms of Use</a>
+            </nav>
+        </div>
+    </header>
+
+    <!-- Page Content -->
+    <section class="container mt-4">
+        <div class="legal-content">
+            <h1>Terms of Use</h1>
+
+            <h2>Product</h2>
+            <p>Neuromax is a digital game collection designed purely for entertainment purposes.</p>
+
+            <h2>Access</h2>
+            <p>Access is granted via email with login credentials after purchase confirmation, providing instant access
+                to the games directly from your browser.</p>
+
+            <h2>Intellectual Property</h2>
+            <p>All content within Neuromax is proprietary. It must not be copied, distributed, shared, or resold under
+                any circumstances.</p>
+
+            <h2>Disclaimer</h2>
+            <p>Neuromax is an entertainment product. It is not a medical device and does not provide medical advice.
+                Games are designed for fun and mental engagement.</p>
+
+            <h2>Refunds</h2>
+            <p>For detailed information regarding refunds, please refer to our <a href="refund.html">Refund Policy</a>.
+            </p>
+
+            <h2>Contact</h2>
+            <p>If you have any questions regarding these Terms, please contact us at support@yourdomain.com.</p>
+
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer>
+        <div class="container">
+            <div class="footer-logo">NEUROMAX</div>
+            <div class="footer-links">
+                <a href="terms.html">Terms of Use</a>
+                <a href="privacy.html">Privacy Policy</a>
+                <a href="refund.html">Refund Policy</a>
+                <a href="support.html">Support</a>
+            </div>
+            <div class="footer-disclaimer">
+                Neuromax is an entertainment product. Games are designed for fun and mental engagement. Not intended as
+                medical advice or treatment.
+            </div>
+            <div class="footer-bottom">
+                <p>NEUROMAX ENTERTAINMENT — [Company Legal Name] — CNPJ: [00.000.000/0001-00]</p>
+                <p>[Address], [City/State], Brazil</p>
+                <p>Support email: support@yourdomain.com | Phone: +55 11 97974-9649</p>
+            </div>
+        </div>
+    </footer>
+
+    <!-- Mobile Menu Script -->
+    <script>
+        const mobileMenu = document.getElementById('mobile-menu');
+        const navLinks = document.getElementById('nav-links');
+
+        mobileMenu.addEventListener('click', () => {
+            navLinks.classList.toggle('active');
+        });
+    </script>
+</body>
+
+</html>

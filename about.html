@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>About Neuromax</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+
+    <!-- Header / Navigation -->
+    <header>
+        <div class="container nav-container">
+            <a href="index.html" class="logo">NEUROMAX</a>
+            <div class="menu-toggle" id="mobile-menu">
+                <span></span>
+                <span></span>
+                <span></span>
+            </div>
+            <nav class="nav-links" id="nav-links">
+                <a href="index.html">Home</a>
+                <a href="about.html" class="active">About</a>
+                <a href="support.html">Support</a>
+                <a href="refund.html">Refund Policy</a>
+                <a href="privacy.html">Privacy Policy</a>
+                <a href="terms.html">Terms of Use</a>
+            </nav>
+        </div>
+    </header>
+
+    <!-- Page Content -->
+    <section class="container mt-4">
+        <div class="legal-content">
+            <h1>About Neuromax</h1>
+
+            <p>Neuromax was created for people who believe keeping the mind active should be enjoyable. We curated
+                hundreds of cognitive games — from digital board game simulations to fast-paced memory challenges — into
+                one organized, easy-to-navigate collection.</p>
+            <p>The games are grouped by category and difficulty, making it easy to start with what you enjoy and
+                gradually take on bigger challenges.</p>
+
+            <h2>Game Categories</h2>
+            <ul style="list-style: none; padding-left: 0;">
+                <li style="margin-bottom: 0.5rem;"><span style="font-size: 1.25rem; margin-right: 0.5rem;">🧠</span>
+                    Memory Games</li>
+                <li style="margin-bottom: 0.5rem;"><span style="font-size: 1.25rem; margin-right: 0.5rem;">♟️</span>
+                    Strategy & Board Simulations</li>
+                <li style="margin-bottom: 0.5rem;"><span style="font-size: 1.25rem; margin-right: 0.5rem;">🔢</span>
+                    Number & Logic Puzzles</li>
+                <li style="margin-bottom: 0.5rem;"><span style="font-size: 1.25rem; margin-right: 0.5rem;">👁️</span>
+                    Visual & Pattern Recognition</li>
+                <li style="margin-bottom: 0.5rem;"><span style="font-size: 1.25rem; margin-right: 0.5rem;">📝</span>
+                    Language & Word Games</li>
+                <li style="margin-bottom: 0.5rem;"><span style="font-size: 1.25rem; margin-right: 0.5rem;">❓</span>
+                    Trivia & General Knowledge</li>
+            </ul>
+            <p style="margin-top: 1.5rem; font-style: italic;">New challenges are added regularly to keep the experience
+                fresh.</p>
+
+            <div class="text-center mt-4">
+                <button class="btn" onclick="scrollToPayment()">Get Instant Access</button>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer>
+        <div class="container">
+            <div class="footer-logo">NEUROMAX</div>
+            <div class="footer-links">
+                <a href="terms.html">Terms of Use</a>
+                <a href="privacy.html">Privacy Policy</a>
+                <a href="refund.html">Refund Policy</a>
+                <a href="support.html">Support</a>
+            </div>
+            <div class="footer-disclaimer">
+                Neuromax is an entertainment product. Games are designed for fun and mental engagement. Not intended as
+                medical advice or treatment.
+            </div>
+            <div class="footer-bottom">
+                <p>NEUROMAX ENTERTAINMENT — [Company Legal Name] — CNPJ: [00.000.000/0001-00]</p>
+                <p>[Address], [City/State], Brazil</p>
+                <p>Support email: support@yourdomain.com | Phone: +55 11 97974-9649</p>
+            </div>
+        </div>
+    </footer>
+
+    <!-- Mobile Menu Script -->
+    <script>
+        const mobileMenu = document.getElementById('mobile-menu');
+        const navLinks = document.getElementById('nav-links');
+
+        mobileMenu.addEventListener('click', () => {
+            navLinks.classList.toggle('active');
+        });
+
+        function scrollToPayment() {
+            alert('Redirect to Checkout');
+        }
+    </script>
+</body>
+
+</html>

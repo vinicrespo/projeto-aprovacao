@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Privacy Policy - Neuromax</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+
+    <!-- Header / Navigation -->
+    <header>
+        <div class="container nav-container">
+            <a href="index.html" class="logo">NEUROMAX</a>
+            <div class="menu-toggle" id="mobile-menu">
+                <span></span>
+                <span></span>
+                <span></span>
+            </div>
+            <nav class="nav-links" id="nav-links">
+                <a href="index.html">Home</a>
+                <a href="about.html">About</a>
+                <a href="support.html">Support</a>
+                <a href="refund.html">Refund Policy</a>
+                <a href="privacy.html" class="active">Privacy Policy</a>
+                <a href="terms.html">Terms of Use</a>
+            </nav>
+        </div>
+    </header>
+
+    <!-- Page Content -->
+    <section class="container mt-4">
+        <div class="legal-content">
+            <h1>Privacy Policy</h1>
+
+            <h2>Data Collected</h2>
+            <p>We may collect information such as your name, email address, phone number, purchase data, and access
+                logs.</p>
+
+            <h2>Purpose</h2>
+            <p>The information collected is used for product delivery, customer support, billing, and transactional
+                communications.</p>
+
+            <h2>Legal Basis</h2>
+            <p>Data is processed on the basis of contract execution and your consent, where applicable.</p>
+
+            <h2>Sharing</h2>
+            <p>Your data is only shared with trusted payment processors and infrastructure providers necessary for
+                operation.</p>
+
+            <h2>Your Rights</h2>
+            <p>You have the right to request access, correction, or deletion of your data at any time.</p>
+
+            <h2>DPO Contact</h2>
+            <p>For any privacy-related matters, contact our Data Protection Officer at support@yourdomain.com.</p>
+
+            <p><strong>Last Updated:</strong> March 11, 2026</p>
+
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer>
+        <div class="container">
+            <div class="footer-logo">NEUROMAX</div>
+            <div class="footer-links">
+                <a href="terms.html">Terms of Use</a>
+                <a href="privacy.html">Privacy Policy</a>
+                <a href="refund.html">Refund Policy</a>
+                <a href="support.html">Support</a>
+            </div>
+            <div class="footer-disclaimer">
+                Neuromax is an entertainment product. Games are designed for fun and mental engagement. Not intended as
+                medical advice or treatment.
+            </div>
+            <div class="footer-bottom">
+                <p>NEUROMAX ENTERTAINMENT — [Company Legal Name] — CNPJ: [00.000.000/0001-00]</p>
+                <p>[Address], [City/State], Brazil</p>
+                <p>Support email: support@yourdomain.com | Phone: +55 11 97974-9649</p>
+            </div>
+        </div>
+    </footer>
+
+    <!-- Mobile Menu Script -->
+    <script>
+        const mobileMenu = document.getElementById('mobile-menu');
+        const navLinks = document.getElementById('nav-links');
+
+        mobileMenu.addEventListener('click', () => {
+            navLinks.classList.toggle('active');
+        });
+    </script>
+</body>
+
+</html>
