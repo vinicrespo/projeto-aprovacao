@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EXCLUSIVE ONE-TIME OFFER | Neuromax Mastermind</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+    <style>
+        :root {
+            --upsell-gradient: linear-gradient(135deg, #3B82F6 0%, #8B5CF6 100%);
+            --upsell-glow: 0 0 20px rgba(59, 130, 246, 0.4);
+        }
+
+        .upsell-header {
+            background-color: #fff;
+            padding: 1rem 0;
+            text-align: center;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: var(--secondary-bg);
+            position: relative;
+        }
+
+        .progress-fill {
+            width: 85%;
+            height: 100%;
+            background: var(--upsell-gradient);
+            transition: width 1s ease-in-out;
+        }
+
+        .upsell-hero {
+            padding: 4rem 0 2rem;
+            text-align: center;
+        }
+
+        .wait-tag {
+            display: inline-block;
+            background: #FEE2E2;
+            color: #EF4444;
+            padding: 0.5rem 1.5rem;
+            border-radius: 50px;
+            font-weight: 700;
+            font-size: 0.875rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 1.5rem;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+            100% { transform: scale(1); }
+        }
+
+        .upsell-title {
+            font-size: 3rem;
+            line-height: 1.1;
+            margin-bottom: 1rem;
+            color: var(--dark-navy);
+        }
+
+        .upsell-subtitle {
+            font-size: 1.5rem;
+            color: var(--text-muted);
+            max-width: 800px;
+            margin: 0 auto 3rem;
+        }
+
+        .card-container {
+            max-width: 900px;
+            margin: 0 auto;
+            position: relative;
+        }
+
+        .offer-card {
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 24px;
+            padding: 3rem;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.1);
+            position: relative;
+            z-index: 2;
+            overflow: hidden;
+        }
+
+        .offer-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 5px;
+            height: 100%;
+            background: var(--upsell-gradient);
+        }
+
+        .price-tag {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .old-price {
+            text-decoration: line-through;
+            color: var(--text-muted);
+            font-size: 1.5rem;
+        }
+
+        .new-price {
+            font-size: 4rem;
+            font-weight: 800;
+            color: var(--dark-navy);
+        }
+
+        .timer-container {
+            background: var(--dark-navy);
+            color: #fff;
+            padding: 1.5rem;
+            border-radius: 12px;
+            display: inline-flex;
+            gap: 2rem;
+            margin-bottom: 3rem;
+        }
+
+        .timer-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .timer-value {
+            font-size: 1.5rem;
+            font-weight: 800;
+        }
+
+        .timer-label {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            opacity: 0.7;
+        }
+
+        .cta-btn {
+            display: block;
+            width: 100%;
+            background: var(--upsell-gradient);
+            color: #fff;
+            padding: 1.5rem;
+            font-size: 1.5rem;
+            font-weight: 800;
+            border-radius: 16px;
+            border: none;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: var(--upsell-glow);
+            text-transform: uppercase;
+            margin-bottom: 1.5rem;
+        }
+
+        .cta-btn:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 15px 30px -5px rgba(59, 130, 246, 0.5);
+        }
+
+        .no-thanks {
+            display: inline-block;
+            color: var(--text-muted);
+            text-decoration: underline;
+            font-size: 0.9rem;
+            transition: color 0.3s;
+        }
+
+        .no-thanks:hover {
+            color: var(--text-main);
+        }
+
+        .features-list {
+            text-align: left;
+            margin: 2rem 0;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.5rem;
+        }
+
+        .feature-item {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            font-weight: 500;
+        }
+
+        .feature-item svg {
+            color: #10B981;
+            flex-shrink: 0;
+        }
+
+        @media (max-width: 768px) {
+            .upsell-title { font-size: 2rem; }
+            .upsell-subtitle { font-size: 1.1rem; }
+            .offer-card { padding: 2rem 1rem; }
+            .features-list { grid-template-columns: 1fr; }
+            .new-price { font-size: 3rem; }
+        }
+    </style>
+</head>
+<body>
+
+    <header class="upsell-header">
+        <div class="container">
+            <span class="logo">NEUROMAX</span>
+        </div>
+    </header>
+    <div class="progress-bar">
+        <div class="progress-fill"></div>
+    </div>
+
+    <section class="upsell-hero">
+        <div class="container">
+            <div class="wait-tag">Wait! Your order is 85% complete...</div>
+            <h1 class="upsell-title">Add the <strong>Platinum Mastermind Pack</strong><br>For Only $27 More?</h1>
+            <p class="upsell-subtitle">Get immediate access to our elite collection of 50+ advanced strategy games and logic simulations that aren't included in the basic version.</p>
+            
+            <div class="card-container">
+                <div class="offer-card">
+                    <div class="timer-container">
+                        <div class="timer-item">
+                            <span class="timer-value" id="minutes">10</span>
+                            <span class="timer-label">Minutes</span>
+                        </div>
+                        <div class="timer-item">
+                            <span class="timer-value" id="seconds">00</span>
+                            <span class="timer-label">Seconds</span>
+                        </div>
+                    </div>
+
+                    <div class="price-tag">
+                        <span class="old-price">Usually $97</span>
+                        <span class="new-price">$27</span>
+                    </div>
+
+                    <div class="features-list">
+                        <div class="feature-item">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                            50+ Elite Strategy Simulations
+                        </div>
+                        <div class="feature-item">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                            Advanced Logic Challenges
+                        </div>
+                        <div class="feature-item">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                            Priority Customer Support
+                        </div>
+                        <div class="feature-item">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                            Lifetime Collection Updates
+                        </div>
+                    </div>
+
+                    <button class="cta-btn" onclick="addToOrder()">YES! Add To My Order</button>
+                    <a href="index.html" class="no-thanks">No thanks, I'll pass on this 70% discount and continue with my current order.</a>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <footer style="margin-top: 4rem; padding: 2rem 0; background: transparent; color: var(--text-muted);">
+        <div class="container text-center">
+            <p>&copy; 2026 Neuromax Collection. All Rights Reserved.</p>
+        </div>
+    </footer>
+
+    <script>
+        // Simple Countdown Timer
+        let time = 600; // 10 minutes in seconds
+        const minutesEl = document.getElementById('minutes');
+        const secondsEl = document.getElementById('seconds');
+
+        function updateTimer() {
+            const minutes = Math.floor(time / 60);
+            let seconds = time % 60;
+            seconds = seconds < 10 ? '0' + seconds : seconds;
+            
+            minutesEl.innerHTML = minutes;
+            secondsEl.innerHTML = seconds;
+            
+            if (time > 0) {
+                time--;
+            }
+        }
+
+        setInterval(updateTimer, 1000);
+
+        function addToOrder() {
+            // Replace with actual upsell checkout link
+            window.location.href = 'https://pay.mycheckoutt.com/019cd95d-9142-7368-9e90-e657eda52f8d?ref=upsell';
+        }
+    </script>
+</body>
+</html>
