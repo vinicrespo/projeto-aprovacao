@@ -1,7 +1,13 @@
 "use client";
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, forwardRef, useImperativeHandle } from "react";
 import type { ShaderUniforms, DiagnosticInfo } from "@/types";
 import { createProgram, setupFullscreenQuad, uploadVideoTexture, createTexture } from "@/lib/shaderLoader";
+
+export interface PreviewCanvasHandle {
+  pauseLoop: () => void;
+  resumeLoop: () => void;
+  renderNow: () => void; // render exactly one frame on demand (used by exporter)
+}
 
 interface Props {
   videoFile: File | null;
@@ -13,7 +19,10 @@ interface Props {
 
 const FRAG_GLSL_PATH = "/standardization_frag.glsl";
 
-export function PreviewCanvas({ videoFile, uniforms, onDiagnostic, onVideoReady, canvasRef: extCanvasRef }: Props) {
+export const PreviewCanvas = forwardRef<PreviewCanvasHandle, Props>(function PreviewCanvas(
+  { videoFile, uniforms, onDiagnostic, onVideoReady, canvasRef: extCanvasRef },
+  ref
+) {
   const internalRef = useRef<HTMLCanvasElement>(null);
   const canvasRef = extCanvasRef ?? internalRef;
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -23,8 +32,10 @@ export function PreviewCanvas({ videoFile, uniforms, onDiagnostic, onVideoReady,
   const texCurrentRef = useRef<WebGLTexture | null>(null);
   const texPrevRef = useRef<WebGLTexture | null>(null);
   const rafRef = useRef<number>(0);
+  const pausedRef = useRef(false);
   const uniformsRef = useRef(uniforms);
   const fpsRef = useRef({ frames: 0, last: performance.now() });
+  const canvasSizeRef = useRef({ w: 0, h: 0 });
 
   uniformsRef.current = uniforms;
 
@@ -33,15 +44,9 @@ export function PreviewCanvas({ videoFile, uniforms, onDiagnostic, onVideoReady,
     if (!gl) throw new Error("WebGL2 not supported");
     glRef.current = gl;
 
-    const fragSrc = await fetch(FRAG_GLSL_PATH).then((r) => r.text()).catch(() => {
-      // inline fallback if public asset not found
-      return `#version 300 es
-precision highp float;
-uniform sampler2D u_texture;
-in vec2 v_texcoord;
-out vec4 fragColor;
-void main() { fragColor = texture(u_texture, v_texcoord); }`;
-    });
+    const fragSrc = await fetch(FRAG_GLSL_PATH).then((r) => r.text()).catch(() =>
+      `#version 300 es\nprecision highp float;\nuniform sampler2D u_texture;\nin vec2 v_texcoord;\nout vec4 fragColor;\nvoid main(){fragColor=texture(u_texture,v_texcoord);}`
+    );
 
     const program = createProgram(gl, fragSrc);
     programRef.current = program;
@@ -50,32 +55,32 @@ void main() { fragColor = texture(u_texture, v_texcoord); }`;
     texPrevRef.current = createTexture(gl);
   }, []);
 
-  const render = useCallback(() => {
+  // Pure WebGL draw — no RAF scheduling, no canvas resize side-effects
+  const renderCore = useCallback(() => {
     const gl = glRef.current;
     const program = programRef.current;
     const vao = vaoRef.current;
     const video = videoRef.current;
     const canvas = canvasRef.current;
-    if (!gl || !program || !vao || !video || !canvas || video.readyState < 2) {
-      rafRef.current = requestAnimationFrame(render);
-      return;
-    }
+    if (!gl || !program || !vao || !video || !canvas || video.readyState < 2) return;
 
-    canvas.width = video.videoWidth || 1280;
-    canvas.height = video.videoHeight || 720;
+    // Only resize canvas when video dimensions actually change (resize clears canvas!)
+    const vw = video.videoWidth || 1280;
+    const vh = video.videoHeight || 720;
+    if (canvasSizeRef.current.w !== vw || canvasSizeRef.current.h !== vh) {
+      canvas.width = vw;
+      canvas.height = vh;
+      canvasSizeRef.current = { w: vw, h: vh };
+    }
     gl.viewport(0, 0, canvas.width, canvas.height);
 
-    // Upload current → prev, video → current
-    if (texPrevRef.current && texCurrentRef.current) {
-      uploadVideoTexture(gl, texCurrentRef.current, video);
-    }
+    uploadVideoTexture(gl, texCurrentRef.current!, video);
 
     gl.useProgram(program);
     gl.bindVertexArray(vao);
 
     const u = uniformsRef.current;
-    const loc = (name: string) => gl.getUniformLocation(program, name);
-
+    const loc = (n: string) => gl.getUniformLocation(program, n);
     gl.uniform1f(loc("u_time"), performance.now() / 1000);
     gl.uniform1f(loc("u_contrast_curve"), u.u_contrast_curve);
     gl.uniform1f(loc("u_chromatic_offset"), u.u_chromatic_offset);
@@ -97,26 +102,33 @@ void main() { fragColor = texture(u_texture, v_texcoord); }`;
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     gl.bindVertexArray(null);
 
-    // FPS counter
     fpsRef.current.frames++;
     const now = performance.now();
     if (now - fpsRef.current.last >= 1000) {
       const fps = fpsRef.current.frames;
       fpsRef.current = { frames: 0, last: now };
-      onDiagnostic?.({
-        fps,
-        gpuMemoryMB: 0,
-        shaderErrors: [],
-        frameTimeMs: fps > 0 ? 1000 / fps : 0,
-      });
+      onDiagnostic?.({ fps, gpuMemoryMB: 0, shaderErrors: [], frameTimeMs: fps > 0 ? 1000 / fps : 0 });
     }
-
-    rafRef.current = requestAnimationFrame(render);
   }, [canvasRef, onDiagnostic]);
+
+  // RAF loop — calls renderCore each tick unless paused
+  const render = useCallback(() => {
+    if (!pausedRef.current) renderCore();
+    rafRef.current = requestAnimationFrame(render);
+  }, [renderCore]);
+
+  useImperativeHandle(ref, () => ({
+    pauseLoop: () => { pausedRef.current = true; },
+    resumeLoop: () => { pausedRef.current = false; },
+    renderNow: renderCore,
+  }), [renderCore]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !videoFile) return;
+
+    pausedRef.current = false;
+    canvasSizeRef.current = { w: 0, h: 0 };
 
     const video = document.createElement("video");
     video.muted = false;
@@ -129,7 +141,7 @@ void main() { fragColor = texture(u_texture, v_texcoord); }`;
     initGL(canvas).then(() => {
       video.play().catch(() => {});
       onVideoReady?.(video);
-      render();
+      rafRef.current = requestAnimationFrame(render);
     });
 
     return () => {
@@ -154,4 +166,4 @@ void main() { fragColor = texture(u_texture, v_texcoord); }`;
       )}
     </div>
   );
-}
+});

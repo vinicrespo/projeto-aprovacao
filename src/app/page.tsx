@@ -2,7 +2,7 @@
 import { useCallback, useRef, useState } from "react";
 import type { ShaderUniforms, AnalysisResult, DiagnosticInfo, ProcessingState } from "@/types";
 import { AssetUploader } from "@/components/AssetUploader";
-import { PreviewCanvas } from "@/components/PreviewCanvas";
+import { PreviewCanvas, type PreviewCanvasHandle } from "@/components/PreviewCanvas";
 import { StandardizationSliders } from "@/components/StandardizationSliders";
 import { QADiagnosticOverlay } from "@/components/QADiagnosticOverlay";
 import { LoginScreen } from "@/components/LoginScreen";
@@ -54,11 +54,12 @@ function App() {
   const [compressorThreshold, setCompressorThreshold] = useState(-18);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const previewRef = useRef<PreviewCanvasHandle>(null);
   const videoElRef = useRef<HTMLVideoElement | null>(null);
   const audioProcessorRef = useRef<AudioProcessor | null>(null);
   const audioStreamRef = useRef<MediaStream | null>(null);
   const cancelExportRef = useRef<{ cancelled: boolean }>({ cancelled: false });
-  const progressRafRef = useRef<number>(0);
+  const [exportDone, setExportDone] = useState(false);
 
   const { presets, addPreset, deletePreset } = useLocalStoragePresets();
 
@@ -138,15 +139,16 @@ function App() {
   const handleExport = useCallback(async () => {
     const canvas = canvasRef.current;
     const video = videoElRef.current;
-    if (!canvas || !video || !videoFile) return;
+    const preview = previewRef.current;
+    if (!canvas || !video || !videoFile || !preview) return;
 
-    // Mute speakers during processing
     audioProcessorRef.current?.setMuted(true);
 
     const seed = newHashSeed();
     setUniforms((u) => ({ ...u, u_hash_seed: seed }));
     cancelExportRef.current = { cancelled: false };
     setExportProgress(0);
+    setExportDone(false);
 
     try {
       const blob = await exportMp4({
@@ -155,7 +157,9 @@ function App() {
         videoFile,
         compressorThreshold,
         invertPhase: phaseInverted,
-        hashSeed: seed,
+        renderNow: preview.renderNow,
+        pauseLoop: preview.pauseLoop,
+        resumeLoop: preview.resumeLoop,
         onProgress: setExportProgress,
         cancelRef: cancelExportRef.current,
       });
@@ -163,10 +167,22 @@ function App() {
       if (blob && !cancelExportRef.current.cancelled) {
         const fname = randomizedFilename(videoFile.name);
         downloadBlob(blob, fname);
-      } else if (!blob) {
-        alert("Seu navegador não suporta WebCodecs. Use o Chrome para exportar MP4.");
+        setExportDone(true);
+        // Auto-close modal after 2s and restore state
+        setTimeout(() => {
+          setExportProgress(null);
+          setExportDone(false);
+          setUniforms((u) => ({ ...u, u_hash_seed: 0 }));
+          audioProcessorRef.current?.setMuted(audioMuted);
+        }, 2000);
+      } else {
+        setUniforms((u) => ({ ...u, u_hash_seed: 0 }));
+        audioProcessorRef.current?.setMuted(audioMuted);
+        setExportProgress(null);
+        if (!blob) alert("Use o Chrome para exportar MP4 (WebCodecs necessário).");
       }
-    } finally {
+    } catch (e) {
+      console.error("Export failed:", e);
       setUniforms((u) => ({ ...u, u_hash_seed: 0 }));
       audioProcessorRef.current?.setMuted(audioMuted);
       setExportProgress(null);
@@ -175,12 +191,15 @@ function App() {
 
   const cancelExport = useCallback(() => {
     cancelExportRef.current.cancelled = true;
-  }, []);
+    setExportProgress(null);
+    setUniforms((u) => ({ ...u, u_hash_seed: 0 }));
+    audioProcessorRef.current?.setMuted(audioMuted);
+  }, [audioMuted]);
 
   return (
     <div className="min-h-screen flex flex-col">
       {exportProgress !== null && (
-        <ExportModal progress={exportProgress} onCancel={cancelExport} />
+        <ExportModal progress={exportProgress} done={exportDone} onCancel={cancelExport} />
       )}
 
       {/* Header */}
@@ -357,6 +376,7 @@ function App() {
           ) : (
             <>
               <PreviewCanvas
+                ref={previewRef}
                 videoFile={videoFile}
                 uniforms={uniforms}
                 onDiagnostic={setDiagnostic}

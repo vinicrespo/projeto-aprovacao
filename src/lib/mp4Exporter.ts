@@ -1,18 +1,12 @@
-/**
- * Exports the processed video as a proper H.264/AAC MP4 using WebCodecs API.
- * Falls back to a WebM blob if WebCodecs is unavailable (Firefox).
- *
- * Audio is processed offline (OfflineAudioContext) — no real-time wait needed.
- * Video frames are captured via requestVideoFrameCallback during playback.
- */
-
 export interface Mp4ExportOptions {
   canvas: HTMLCanvasElement;
   video: HTMLVideoElement;
   videoFile: File;
   compressorThreshold: number;
   invertPhase: boolean;
-  hashSeed: number;
+  renderNow: () => void;       // WebGL render-on-demand from PreviewCanvas
+  pauseLoop: () => void;       // pause preview RAF during export
+  resumeLoop: () => void;      // resume preview RAF after export
   onProgress: (ratio: number) => void;
   cancelRef: { cancelled: boolean };
 }
@@ -31,192 +25,189 @@ async function processAudioOffline(
   compressorThreshold: number,
   invertPhase: boolean
 ): Promise<AudioBuffer> {
-  const arrayBuffer = await file.arrayBuffer();
+  const buf = await file.arrayBuffer();
   const tempCtx = new AudioContext();
-  let audioBuffer: AudioBuffer;
+  let decoded: AudioBuffer;
   try {
-    audioBuffer = await tempCtx.decodeAudioData(arrayBuffer);
+    decoded = await tempCtx.decodeAudioData(buf);
   } finally {
     await tempCtx.close();
   }
 
-  const channels = audioBuffer.numberOfChannels;
-  const length = audioBuffer.length;
-  const sampleRate = audioBuffer.sampleRate;
+  const ch = Math.min(decoded.numberOfChannels, 2);
+  const offCtx = new OfflineAudioContext(ch, decoded.length, decoded.sampleRate);
+  const src = offCtx.createBufferSource();
+  src.buffer = decoded;
 
-  const offlineCtx = new OfflineAudioContext(Math.min(channels, 2), length, sampleRate);
+  const comp = offCtx.createDynamicsCompressor();
+  comp.threshold.value = compressorThreshold;
+  comp.knee.value = 6;
+  comp.ratio.value = 4;
+  comp.attack.value = 0.003;
+  comp.release.value = 0.25;
 
-  const source = offlineCtx.createBufferSource();
-  source.buffer = audioBuffer;
+  const split = offCtx.createChannelSplitter(2);
+  const merge = offCtx.createChannelMerger(2);
+  const gL = offCtx.createGain();
+  const gR = offCtx.createGain();
+  gL.gain.value = 1;
+  gR.gain.value = invertPhase ? -1 : 1;
 
-  const compressor = offlineCtx.createDynamicsCompressor();
-  compressor.threshold.value = compressorThreshold;
-  compressor.knee.value = 6;
-  compressor.ratio.value = 4;
-  compressor.attack.value = 0.003;
-  compressor.release.value = 0.25;
+  src.connect(comp);
+  comp.connect(split);
+  split.connect(gL, 0); gL.connect(merge, 0, 0);
+  split.connect(gR, 1); gR.connect(merge, 0, 1);
+  merge.connect(offCtx.destination);
+  src.start();
 
-  const splitter = offlineCtx.createChannelSplitter(2);
-  const merger = offlineCtx.createChannelMerger(2);
-  const gainL = offlineCtx.createGain();
-  const gainR = offlineCtx.createGain();
-  gainL.gain.value = 1;
-  gainR.gain.value = invertPhase ? -1 : 1;
-
-  source.connect(compressor);
-  compressor.connect(splitter);
-  splitter.connect(gainL, 0);
-  splitter.connect(gainR, 1);
-  gainL.connect(merger, 0, 0);
-  gainR.connect(merger, 0, 1);
-  merger.connect(offlineCtx.destination);
-  source.start();
-
-  return offlineCtx.startRendering();
+  return offCtx.startRendering();
 }
 
-export async function exportMp4(options: Mp4ExportOptions): Promise<Blob | null> {
-  const { canvas, video, videoFile, compressorThreshold, invertPhase, hashSeed, onProgress, cancelRef } = options;
+export async function exportMp4(opts: Mp4ExportOptions): Promise<Blob | null> {
+  const { canvas, video, videoFile, compressorThreshold, invertPhase,
+          renderNow, pauseLoop, resumeLoop, onProgress, cancelRef } = opts;
 
-  if (!webCodecsAvailable()) {
-    // Fallback: return null so caller can show a message
-    return null;
-  }
+  if (!webCodecsAvailable()) return null;
 
-  const { Muxer, ArrayBufferTarget } = await import("mp4-muxer");
+  // Pause the preview RAF so it doesn't interfere with our frame captures
+  pauseLoop();
 
-  const width = video.videoWidth || 1280;
-  const height = video.videoHeight || 720;
-  const sampleRate = 44100;
+  try {
+    const { Muxer, ArrayBufferTarget } = await import("mp4-muxer");
 
-  onProgress(0.02);
+    const width = video.videoWidth || 1280;
+    const height = video.videoHeight || 720;
+    const sampleRate = 44100;
 
-  // --- Audio (offline, fast) ---
-  const renderedAudio = await processAudioOffline(videoFile, compressorThreshold, invertPhase);
-  if (cancelRef.cancelled) return null;
+    onProgress(0.02);
 
-  onProgress(0.15);
+    // --- Audio (offline, fast) ---
+    const renderedAudio = await processAudioOffline(videoFile, compressorThreshold, invertPhase);
+    if (cancelRef.cancelled) return null;
+    onProgress(0.12);
 
-  const target = new ArrayBufferTarget();
-  const muxer = new Muxer({
-    target,
-    video: { codec: "avc", width, height },
-    audio: { codec: "aac", numberOfChannels: 2, sampleRate },
-    firstTimestampBehavior: "offset",
-    fastStart: "in-memory",
-  });
-
-  // AudioEncoder
-  const audioEncoder = new AudioEncoder({
-    output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
-    error: (e) => console.error("AudioEncoder:", e),
-  });
-  audioEncoder.configure({
-    codec: "mp4a.40.2",
-    sampleRate,
-    numberOfChannels: 2,
-    bitrate: 192_000,
-  });
-
-  // Feed audio in 1024-frame chunks
-  const CHUNK = 1024;
-  const totalSamples = renderedAudio.length;
-  const ch0 = renderedAudio.getChannelData(0);
-  const ch1 = renderedAudio.numberOfChannels > 1
-    ? renderedAudio.getChannelData(1)
-    : renderedAudio.getChannelData(0);
-
-  for (let i = 0; i < totalSamples; i += CHUNK) {
-    if (cancelRef.cancelled) { audioEncoder.close(); return null; }
-    const end = Math.min(i + CHUNK, totalSamples);
-    const frames = end - i;
-    const planar = new Float32Array(frames * 2);
-    planar.set(ch0.slice(i, end), 0);
-    planar.set(ch1.slice(i, end), frames);
-    const audioData = new AudioData({
-      format: "f32-planar",
-      sampleRate,
-      numberOfChannels: 2,
-      numberOfFrames: frames,
-      timestamp: Math.round((i / sampleRate) * 1_000_000),
-      data: planar,
+    const target = new ArrayBufferTarget();
+    const muxer = new Muxer({
+      target,
+      video: { codec: "avc", width, height },
+      audio: { codec: "aac", numberOfChannels: 2, sampleRate },
+      firstTimestampBehavior: "offset",
+      fastStart: "in-memory",
     });
-    audioEncoder.encode(audioData);
-    audioData.close();
-  }
-  await audioEncoder.flush();
-  audioEncoder.close();
 
-  onProgress(0.25);
-  if (cancelRef.cancelled) return null;
+    // AudioEncoder
+    const audioEncoder = new AudioEncoder({
+      output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
+      error: (e) => console.error("AudioEncoder:", e),
+    });
+    audioEncoder.configure({ codec: "mp4a.40.2", sampleRate, numberOfChannels: 2, bitrate: 192_000 });
 
-  // --- Video (realtime via requestVideoFrameCallback) ---
-  const videoEncoder = new VideoEncoder({
-    output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
-    error: (e) => console.error("VideoEncoder:", e),
-  });
+    const CHUNK = 1024;
+    const total = renderedAudio.length;
+    const ch0 = renderedAudio.getChannelData(0);
+    const ch1 = renderedAudio.numberOfChannels > 1 ? renderedAudio.getChannelData(1) : ch0;
 
-  const avcCodec = "avc1.4d001f"; // H.264 Main Profile Level 3.1
-  videoEncoder.configure({
-    codec: avcCodec,
-    width,
-    height,
-    bitrate: 8_000_000,
-    framerate: 30,
-    hardwareAcceleration: "prefer-hardware",
-    avc: { format: "avc" },
-  });
+    for (let i = 0; i < total; i += CHUNK) {
+      if (cancelRef.cancelled) { audioEncoder.close(); return null; }
+      const end = Math.min(i + CHUNK, total);
+      const frames = end - i;
+      const planar = new Float32Array(frames * 2);
+      planar.set(ch0.subarray(i, end), 0);
+      planar.set(ch1.subarray(i, end), frames);
+      const ad = new AudioData({
+        format: "f32-planar",
+        sampleRate,
+        numberOfChannels: 2,
+        numberOfFrames: frames,
+        timestamp: Math.round((i / sampleRate) * 1_000_000),
+        data: planar,
+      });
+      audioEncoder.encode(ad);
+      ad.close();
+    }
+    await audioEncoder.flush();
+    audioEncoder.close();
 
-  let frameIndex = 0;
-  const duration = video.duration;
+    onProgress(0.2);
+    if (cancelRef.cancelled) return null;
 
-  await new Promise<void>((resolve, reject) => {
-    if (cancelRef.cancelled) { resolve(); return; }
+    // --- Video (requestVideoFrameCallback + explicit WebGL render) ---
+    const videoEncoder = new VideoEncoder({
+      output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
+      error: (e) => console.error("VideoEncoder:", e),
+    });
+    videoEncoder.configure({
+      codec: "avc1.4d001f",
+      width, height,
+      bitrate: 8_000_000,
+      framerate: 30,
+      hardwareAcceleration: "prefer-hardware",
+      avc: { format: "avc" },
+    });
 
-    const captureFrame = (_now: number, meta: VideoFrameCallbackMetadata) => {
+    const duration = video.duration;
+    let frameIndex = 0;
+
+    // Disable loop so video.onended fires naturally
+    video.loop = false;
+    video.currentTime = 0;
+
+    await new Promise<void>((resolve) => {
       if (cancelRef.cancelled) { resolve(); return; }
 
-      // Two RAF ticks so WebGL has definitely uploaded this video frame
-      requestAnimationFrame(() => {
+      const onEnded = () => { cleanup(); resolve(); };
+      const cleanup = () => {
+        video.removeEventListener("ended", onEnded);
+      };
+      video.addEventListener("ended", onEnded, { once: true });
+
+      // Safety: if ended never fires (e.g. very short clip), bail after duration + 4s
+      const safety = setTimeout(() => { cleanup(); resolve(); }, duration * 1000 + 4000);
+      // Keep reference so we can clear it
+      video.addEventListener("ended", () => clearTimeout(safety), { once: true });
+
+      const captureFrame = (_now: number, meta: VideoFrameCallbackMetadata) => {
+        if (cancelRef.cancelled) { resolve(); return; }
+
+        // Tell WebGL to render this exact video frame right now
+        renderNow();
+
+        // One microtask tick so WebGL pipeline flushes before we capture
         requestAnimationFrame(() => {
-          const timestamp = Math.round(meta.mediaTime * 1_000_000);
+          const tsUs = Math.round(meta.mediaTime * 1_000_000);
           try {
-            const vf = new VideoFrame(canvas, { timestamp });
+            const vf = new VideoFrame(canvas, { timestamp: tsUs });
             videoEncoder.encode(vf, { keyFrame: frameIndex % 60 === 0 });
             vf.close();
           } catch (e) {
-            console.warn("VideoFrame capture failed:", e);
+            console.warn("VideoFrame capture error:", e);
           }
           frameIndex++;
-          const videoProgress = Math.min(meta.mediaTime / duration, 1);
-          onProgress(0.25 + videoProgress * 0.75);
+          onProgress(0.2 + Math.min(meta.mediaTime / duration, 1) * 0.8);
 
           if (!video.ended && !cancelRef.cancelled) {
             video.requestVideoFrameCallback(captureFrame);
-          } else {
-            resolve();
           }
         });
-      });
-    };
+      };
 
-    video.requestVideoFrameCallback(captureFrame);
-    video.currentTime = 0;
-    video.play().catch(reject);
-    video.onended = () => resolve();
+      video.requestVideoFrameCallback(captureFrame);
+      video.play().catch(() => resolve());
+    });
 
-    // Safety timeout
-    setTimeout(resolve, duration * 1000 + 5000);
-  });
+    if (cancelRef.cancelled) { videoEncoder.close(); return null; }
 
-  if (cancelRef.cancelled) { videoEncoder.close(); return null; }
+    await videoEncoder.flush();
+    videoEncoder.close();
+    muxer.finalize();
 
-  await videoEncoder.flush();
-  videoEncoder.close();
-  muxer.finalize();
+    onProgress(1);
+    return new Blob([target.buffer], { type: "video/mp4" });
 
-  onProgress(1);
-
-  const { buffer } = target;
-  return new Blob([buffer], { type: "video/mp4" });
+  } finally {
+    // Always restore preview: re-enable loop and resume RAF
+    video.loop = true;
+    video.play().catch(() => {});
+    resumeLoop();
+  }
 }
