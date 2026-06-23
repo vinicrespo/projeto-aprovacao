@@ -5,10 +5,12 @@ import { AssetUploader } from "@/components/AssetUploader";
 import { PreviewCanvas } from "@/components/PreviewCanvas";
 import { StandardizationSliders } from "@/components/StandardizationSliders";
 import { QADiagnosticOverlay } from "@/components/QADiagnosticOverlay";
+import { LoginScreen } from "@/components/LoginScreen";
 import { useLocalStoragePresets } from "@/hooks/useLocalStoragePresets";
 import { analyzeVideo } from "@/lib/analyzer";
 import { AudioProcessor } from "@/lib/audioProcessor";
 import { downloadBlob } from "@/lib/exporter";
+import { newHashSeed, injectHashNoise, randomizedFilename } from "@/lib/hashBuster";
 
 const DEFAULT_UNIFORMS: ShaderUniforms = {
   u_time: 0,
@@ -19,9 +21,20 @@ const DEFAULT_UNIFORMS: ShaderUniforms = {
   u_noise_enabled: 1,
   u_flip_v: 0,
   u_flip_h: 0,
+  u_hash_seed: 0, // set fresh on each export
 };
 
 export default function DashboardPage() {
+  const [authed, setAuthed] = useState(() => {
+    try { return sessionStorage.getItem("fu_auth") === "1"; } catch { return false; }
+  });
+
+  if (!authed) return <LoginScreen onAuth={() => setAuthed(true)} />;
+
+  return <App />;
+}
+
+function App() {
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [uniforms, setUniforms] = useState<ShaderUniforms>(DEFAULT_UNIFORMS);
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
@@ -114,6 +127,10 @@ export default function DashboardPage() {
     setIsExporting(true);
     chunksRef.current = [];
 
+    // Assign a fresh random hash seed so every exported file has a unique binary fingerprint
+    const seed = newHashSeed();
+    setUniforms((u) => ({ ...u, u_hash_seed: seed }));
+
     const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")
       ? "video/webm;codecs=vp9,opus"
       : "video/webm";
@@ -130,10 +147,14 @@ export default function DashboardPage() {
     recorder.ondataavailable = (e) => {
       if (e.data.size > 0) chunksRef.current.push(e.data);
     };
-    recorder.onstop = () => {
-      const blob = new Blob(chunksRef.current, { type: mimeType });
-      const original = videoFile?.name.replace(/\.[^.]+$/, "") ?? "asset";
-      downloadBlob(blob, `${original}_standardized.webm`);
+    recorder.onstop = async () => {
+      let blob = new Blob(chunksRef.current, { type: mimeType });
+      // Inject additional binary noise to guarantee a unique file hash
+      blob = await injectHashNoise(blob);
+      const fname = randomizedFilename(videoFile?.name ?? "criativo.webm");
+      downloadBlob(blob, fname);
+      // Reset hash seed back to 0 for live preview (no visible change)
+      setUniforms((u) => ({ ...u, u_hash_seed: 0 }));
       setIsExporting(false);
     };
 
@@ -144,7 +165,6 @@ export default function DashboardPage() {
 
     video.onended = () => recorder.stop();
 
-    // Safety timeout: stop after duration + 2s
     const dur = video.duration * 1000 + 2000;
     setTimeout(() => {
       if (recorder.state === "recording") recorder.stop();
@@ -339,16 +359,16 @@ export default function DashboardPage() {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                         d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                     </svg>
-                    Exportar
+                    Baixar Vídeo
                   </button>
                 ) : (
                   <button
                     onClick={stopExport}
                     className="text-sm px-5 py-2 rounded-lg bg-red-500/80 text-white font-medium
-                               hover:bg-red-600 transition-colors flex items-center gap-2"
+                               hover:bg-red-600 transition-colors flex items-center gap-2 animate-pulse"
                   >
                     <div className="w-3 h-3 rounded-sm bg-white" />
-                    Parar
+                    Gravando… Parar
                   </button>
                 )}
 

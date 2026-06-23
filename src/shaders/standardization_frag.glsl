@@ -11,6 +11,7 @@ uniform float u_noise_density;
 uniform float u_noise_enabled;
 uniform float u_flip_v;
 uniform float u_flip_h;
+uniform float u_hash_seed; // unique per export — makes file hash unrecognizable
 
 in vec2 v_texcoord;
 out vec4 fragColor;
@@ -110,6 +111,11 @@ void main() {
   // 6. Procedural dithering over compression artifacts (toggleable)
   float grain = grainDither(uv, u_noise_density, u_time) * u_noise_enabled;
   color += grain;
+
+  // Imperceptible hash-busting noise: ~0.4/255 per channel, unique per export
+  vec2 hashUV = uv + vec2(u_hash_seed * 7.3, u_hash_seed * 3.7);
+  float hashNoise = (noise(hashUV * 2048.0 + u_hash_seed * 100.0) * 2.0 - 1.0) * (1.5 / 255.0);
+  color += hashNoise;
 
   fragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
 }

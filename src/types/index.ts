@@ -7,6 +7,7 @@ export interface ShaderUniforms {
   u_noise_enabled: number;   // 1.0 = on, 0.0 = off
   u_flip_v: number;          // 1.0 = flip vertical
   u_flip_h: number;          // 1.0 = flip horizontal
+  u_hash_seed: number;       // random per export for unique file hash
 }
 
 export interface AnalysisResult {

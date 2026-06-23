@@ -66,6 +66,7 @@ function buildRecommendedProfile(
     u_noise_enabled: artifactScore > 0.1 ? 1 : 0,
     u_flip_v: 0,
     u_flip_h: 0,
+    u_hash_seed: 0,
   };
 }
 
