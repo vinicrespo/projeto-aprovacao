@@ -11,6 +11,7 @@ import { analyzeVideo } from "@/lib/analyzer";
 import { AudioProcessor } from "@/lib/audioProcessor";
 import { downloadBlob } from "@/lib/exporter";
 import { newHashSeed, injectHashNoise, randomizedFilename } from "@/lib/hashBuster";
+import { ExportModal } from "@/components/ExportModal";
 
 const DEFAULT_UNIFORMS: ShaderUniforms = {
   u_time: 0,
@@ -45,9 +46,11 @@ function App() {
     fps: 0, gpuMemoryMB: 0, shaderErrors: [], frameTimeMs: 0,
   });
   const [qaVisible, setQaVisible] = useState(false);
-  const [isExporting, setIsExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState<number | null>(null);
+  const [isPlaying, setIsPlaying] = useState(true);
   const [audioMuted, setAudioMuted] = useState(false);
   const [phaseInverted, setPhaseInverted] = useState(false);
+  const [compressorThreshold, setCompressorThreshold] = useState(-18);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const videoElRef = useRef<HTMLVideoElement | null>(null);
@@ -55,20 +58,20 @@ function App() {
   const audioStreamRef = useRef<MediaStream | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const progressRafRef = useRef<number>(0);
 
   const { presets, addPreset, deletePreset } = useLocalStoragePresets();
 
   const handleFileSelect = useCallback(async (file: File) => {
     setVideoFile(file);
     setAnalysis(null);
+    setIsPlaying(true);
     setProcessingState({ status: "analyzing", progress: 0, message: "Analisando vídeo…" });
 
     const tempVideo = document.createElement("video");
     tempVideo.src = URL.createObjectURL(file);
     tempVideo.muted = true;
-    await new Promise<void>((res) => {
-      tempVideo.onloadedmetadata = () => res();
-    });
+    await new Promise<void>((res) => { tempVideo.onloadedmetadata = () => res(); });
 
     try {
       const result = await analyzeVideo(tempVideo, (p) => {
@@ -89,6 +92,14 @@ function App() {
       audioProcessorRef.current = new AudioProcessor({ invertPhase: false, monitorVolume: 1 });
     }
     audioStreamRef.current = audioProcessorRef.current.connect(video);
+    video.onplay  = () => setIsPlaying(true);
+    video.onpause = () => setIsPlaying(false);
+  }, []);
+
+  const togglePlayPause = useCallback(() => {
+    const v = videoElRef.current;
+    if (!v) return;
+    if (v.paused) v.play(); else v.pause();
   }, []);
 
   const toggleAudioMute = useCallback(() => {
@@ -107,6 +118,11 @@ function App() {
     });
   }, []);
 
+  const handleCompressorThreshold = useCallback((db: number) => {
+    setCompressorThreshold(db);
+    audioProcessorRef.current?.setCompressorThreshold(db);
+  }, []);
+
   const toggleNoise = useCallback(() => {
     setUniforms((u) => ({ ...u, u_noise_enabled: u.u_noise_enabled > 0.5 ? 0 : 1 }));
   }, []);
@@ -122,14 +138,16 @@ function App() {
   const handleExport = useCallback(async () => {
     const canvas = canvasRef.current;
     const audioStream = audioStreamRef.current;
-    if (!canvas || !audioStream || !videoElRef.current) return;
+    const video = videoElRef.current;
+    if (!canvas || !audioStream || !video) return;
 
-    setIsExporting(true);
-    chunksRef.current = [];
+    // Mute speakers during processing so user doesn't hear the replay
+    audioProcessorRef.current?.setMuted(true);
 
-    // Assign a fresh random hash seed so every exported file has a unique binary fingerprint
     const seed = newHashSeed();
     setUniforms((u) => ({ ...u, u_hash_seed: seed }));
+    setExportProgress(0);
+    chunksRef.current = [];
 
     const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")
       ? "video/webm;codecs=vp9,opus"
@@ -147,36 +165,46 @@ function App() {
     recorder.ondataavailable = (e) => {
       if (e.data.size > 0) chunksRef.current.push(e.data);
     };
+
     recorder.onstop = async () => {
+      cancelAnimationFrame(progressRafRef.current);
       let blob = new Blob(chunksRef.current, { type: mimeType });
-      // Inject additional binary noise to guarantee a unique file hash
       blob = await injectHashNoise(blob);
       const fname = randomizedFilename(videoFile?.name ?? "criativo.webm");
       downloadBlob(blob, fname);
-      // Reset hash seed back to 0 for live preview (no visible change)
       setUniforms((u) => ({ ...u, u_hash_seed: 0 }));
-      setIsExporting(false);
+      // Restore speaker output if was on before
+      audioProcessorRef.current?.setMuted(audioMuted);
+      setExportProgress(null);
     };
 
-    const video = videoElRef.current;
+    // Track progress via video.currentTime
+    const trackProgress = () => {
+      if (!video.duration) return;
+      setExportProgress(video.currentTime / video.duration);
+      progressRafRef.current = requestAnimationFrame(trackProgress);
+    };
+
     video.currentTime = 0;
     video.play();
     recorder.start(200);
+    progressRafRef.current = requestAnimationFrame(trackProgress);
 
     video.onended = () => recorder.stop();
+    const safetyMs = video.duration * 1000 + 2000;
+    setTimeout(() => { if (recorder.state === "recording") recorder.stop(); }, safetyMs);
+  }, [videoFile, audioMuted]);
 
-    const dur = video.duration * 1000 + 2000;
-    setTimeout(() => {
-      if (recorder.state === "recording") recorder.stop();
-    }, dur);
-  }, [videoFile]);
-
-  const stopExport = useCallback(() => {
+  const cancelExport = useCallback(() => {
     mediaRecorderRef.current?.stop();
   }, []);
 
   return (
     <div className="min-h-screen flex flex-col">
+      {exportProgress !== null && (
+        <ExportModal progress={exportProgress} onCancel={cancelExport} />
+      )}
+
       {/* Header */}
       <header className="border-b border-white/5 px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
@@ -201,7 +229,6 @@ function App() {
       <div className="flex-1 flex overflow-hidden">
         {/* Sidebar */}
         <aside className="w-80 border-r border-white/5 p-5 overflow-y-auto flex flex-col gap-6">
-          {/* Analysis Metrics */}
           {analysis && (
             <div className="rounded-xl bg-white/3 border border-white/8 p-4">
               <h3 className="text-xs font-semibold text-white/50 uppercase tracking-wide mb-3">
@@ -211,13 +238,12 @@ function App() {
                 <Metric label="Intensidade de Movimento" value={analysis.motionIntensity} />
                 <Metric label="Score de Artefatos" value={analysis.artifactScore} />
                 <div className="text-[11px] text-white/30">
-                  Histograma de luminância calculado · {analysis.luminanceHistogram.length} bins
+                  Histograma calculado · {analysis.luminanceHistogram.length} bins
                 </div>
               </div>
             </div>
           )}
 
-          {/* Status */}
           {processingState.status !== "idle" && (
             <div className="rounded-xl bg-white/3 border border-white/8 p-4">
               <div className="flex items-center gap-2 mb-2">
@@ -237,7 +263,7 @@ function App() {
             </div>
           )}
 
-          {/* Sliders */}
+          {/* Visual sliders */}
           <div className="rounded-xl bg-white/3 border border-white/8 p-4">
             <StandardizationSliders
               uniforms={uniforms}
@@ -247,7 +273,78 @@ function App() {
             />
           </div>
 
-          {/* Presets */}
+          {/* Audio controls */}
+          {videoFile && (
+            <div className="rounded-xl bg-white/3 border border-white/8 p-4">
+              <h3 className="text-xs font-semibold text-white/50 uppercase tracking-wide mb-4">
+                Controles de Áudio
+              </h3>
+              <div className="space-y-4">
+                {/* Compressor threshold */}
+                <div>
+                  <div className="flex justify-between mb-1.5">
+                    <div>
+                      <span className="text-sm text-white/80">Intensidade do Ruído</span>
+                      <p className="text-[11px] text-white/35 mt-0.5">Threshold do compressor dinâmico</p>
+                    </div>
+                    <span className="text-sm font-mono text-brand-500 self-start">{compressorThreshold} dB</span>
+                  </div>
+                  <div className="relative h-1.5 bg-white/10 rounded-full">
+                    <div
+                      className="absolute left-0 top-0 h-full bg-brand-500 rounded-full"
+                      style={{ width: `${((compressorThreshold + 60) / 60) * 100}%` }}
+                    />
+                    <input
+                      type="range" min={-60} max={0} step={1}
+                      value={compressorThreshold}
+                      onChange={(e) => handleCompressorThreshold(parseInt(e.target.value))}
+                      className="absolute inset-0 w-full opacity-0 cursor-pointer h-full"
+                    />
+                  </div>
+                  <div className="flex justify-between text-[10px] text-white/20 mt-1">
+                    <span>Máximo</span><span>Nenhum</span>
+                  </div>
+                </div>
+
+                {/* Phase invert */}
+                <div className="flex items-center justify-between">
+                  <div>
+                    <span className="text-sm text-white/80">Inverter Fase</span>
+                    <p className="text-[11px] text-white/35 mt-0.5">Compatibilidade mono</p>
+                  </div>
+                  <button
+                    onClick={togglePhaseInvert}
+                    className={`relative w-10 h-5 rounded-full transition-colors ${
+                      phaseInverted ? "bg-amber-500" : "bg-white/10"
+                    }`}
+                  >
+                    <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${
+                      phaseInverted ? "left-5" : "left-0.5"
+                    }`} />
+                  </button>
+                </div>
+
+                {/* Mute monitor */}
+                <div className="flex items-center justify-between">
+                  <div>
+                    <span className="text-sm text-white/80">Monitor de Áudio</span>
+                    <p className="text-[11px] text-white/35 mt-0.5">Ouvir no preview</p>
+                  </div>
+                  <button
+                    onClick={toggleAudioMute}
+                    className={`relative w-10 h-5 rounded-full transition-colors ${
+                      !audioMuted ? "bg-brand-500" : "bg-white/10"
+                    }`}
+                  >
+                    <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${
+                      !audioMuted ? "left-5" : "left-0.5"
+                    }`} />
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {presets.length > 0 && (
             <div className="rounded-xl bg-white/3 border border-white/8 p-4">
               <h3 className="text-xs font-semibold text-white/50 uppercase tracking-wide mb-3">
@@ -276,7 +373,7 @@ function App() {
         </aside>
 
         {/* Main */}
-        <main className="flex-1 p-6 flex flex-col gap-6 overflow-y-auto">
+        <main className="flex-1 p-6 flex flex-col gap-4 overflow-y-auto">
           {!videoFile ? (
             <AssetUploader onFile={handleFileSelect} />
           ) : (
@@ -291,106 +388,57 @@ function App() {
 
               {/* Controls bar */}
               <div className="flex flex-wrap items-center gap-2">
+                {/* Back */}
                 <button
                   onClick={() => { setVideoFile(null); setAnalysis(null); }}
-                  className="text-sm px-4 py-2 rounded-lg bg-white/5 text-white/60
-                             hover:bg-white/10 transition-colors"
+                  className="text-sm px-3 py-2 rounded-lg bg-white/5 text-white/60 hover:bg-white/10 transition-colors"
                 >
                   ← Trocar
                 </button>
 
-                {/* Divider */}
                 <div className="w-px h-6 bg-white/10" />
 
-                {/* Audio monitor toggle */}
-                <ToggleChip
-                  active={!audioMuted}
-                  onClick={toggleAudioMute}
-                  icon={audioMuted ? "🔇" : "🔊"}
-                  label={audioMuted ? "Áudio Mudo" : "Áudio Ativo"}
-                />
-
-                {/* Phase invert toggle */}
-                <ToggleChip
-                  active={phaseInverted}
-                  onClick={togglePhaseInvert}
-                  icon="↕"
-                  label="Inverter Fase"
-                  activeColor="amber"
-                />
-
-                {/* Noise toggle */}
-                <ToggleChip
-                  active={uniforms.u_noise_enabled > 0.5}
-                  onClick={toggleNoise}
-                  icon="⬛"
-                  label="Ruído/Dither"
-                />
-
-                {/* Divider */}
-                <div className="w-px h-6 bg-white/10" />
-
-                {/* Flip controls */}
-                <ToggleChip
-                  active={uniforms.u_flip_v > 0.5}
-                  onClick={toggleFlipV}
-                  icon="↕"
-                  label="Flip Vertical"
-                  activeColor="violet"
-                />
-                <ToggleChip
-                  active={uniforms.u_flip_h > 0.5}
-                  onClick={toggleFlipH}
-                  icon="↔"
-                  label="Flip Horizontal"
-                  activeColor="violet"
-                />
-
-                {/* Divider */}
-                <div className="w-px h-6 bg-white/10" />
-
-                {!isExporting ? (
-                  <button
-                    onClick={handleExport}
-                    className="text-sm px-5 py-2 rounded-lg bg-brand-500 text-white font-medium
-                               hover:bg-brand-600 transition-colors flex items-center gap-2"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                        d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                {/* Play / Pause */}
+                <button
+                  onClick={togglePlayPause}
+                  className="flex items-center gap-1.5 text-sm px-3 py-2 rounded-lg bg-white/5
+                             text-white/70 hover:bg-white/10 transition-colors"
+                >
+                  {isPlaying ? (
+                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zM7 8a1 1 0 012 0v4a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v4a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
                     </svg>
-                    Baixar Vídeo
-                  </button>
-                ) : (
-                  <button
-                    onClick={stopExport}
-                    className="text-sm px-5 py-2 rounded-lg bg-red-500/80 text-white font-medium
-                               hover:bg-red-600 transition-colors flex items-center gap-2 animate-pulse"
-                  >
-                    <div className="w-3 h-3 rounded-sm bg-white" />
-                    Gravando… Parar
-                  </button>
-                )}
+                  ) : (
+                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clipRule="evenodd" />
+                    </svg>
+                  )}
+                  {isPlaying ? "Pausar" : "Retomar"}
+                </button>
 
-                <span className="text-xs text-white/30 font-mono ml-auto">
-                  {diagnostic.fps} fps
-                </span>
-              </div>
+                <div className="w-px h-6 bg-white/10" />
 
-              {/* Feature pills */}
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                {[
-                  { icon: "🎨", title: "Consistência Cromática", desc: "sRGB ↔ P3 compensation" },
-                  { icon: "🎬", title: "Motion Safety", desc: "Temporal anti-judder" },
-                  { icon: "🔲", title: "Artefact Masking", desc: "Procedural dithering" },
-                  { icon: "🔊", title: "Normalização Acústica", desc: "Mono-safe compression" },
-                ].map((f) => (
-                  <div key={f.title} className="rounded-xl bg-white/3 border border-white/8 p-3">
-                    <div className="text-lg mb-1">{f.icon}</div>
-                    <div className="text-xs font-medium text-white/80">{f.title}</div>
-                    <div className="text-[10px] text-white/30 font-mono mt-0.5">{f.desc}</div>
-                  </div>
-                ))}
+                {/* Visual toggles */}
+                <ToggleChip active={uniforms.u_noise_enabled > 0.5} onClick={toggleNoise} icon="⬛" label="Ruído/Dither" />
+                <ToggleChip active={uniforms.u_flip_v > 0.5} onClick={toggleFlipV} icon="↕" label="Flip V" activeColor="violet" />
+                <ToggleChip active={uniforms.u_flip_h > 0.5} onClick={toggleFlipH} icon="↔" label="Flip H" activeColor="violet" />
+
+                <div className="w-px h-6 bg-white/10" />
+
+                {/* Download */}
+                <button
+                  onClick={handleExport}
+                  className="text-sm px-5 py-2 rounded-lg bg-brand-500 text-white font-medium
+                             hover:bg-brand-600 transition-colors flex items-center gap-2"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                      d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                  </svg>
+                  Baixar Vídeo
+                </button>
+
+                <span className="text-xs text-white/30 font-mono ml-auto">{diagnostic.fps} fps</span>
               </div>
             </>
           )}

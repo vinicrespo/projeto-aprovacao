@@ -95,6 +95,16 @@ export class AudioProcessor {
     this.lowPass.frequency.value = hz;
   }
 
+  /** threshold: -60 (máxima compressão) a 0 dB (sem efeito) */
+  setCompressorThreshold(db: number) {
+    this.compressor.threshold.value = Math.max(-60, Math.min(0, db));
+  }
+
+  /** ratio: 1 (sem compressão) a 20 (limitador forte) */
+  setCompressorRatio(ratio: number) {
+    this.compressor.ratio.value = Math.max(1, Math.min(20, ratio));
+  }
+
   getAudioContext(): AudioContext {
     return this.ctx;
   }
