@@ -4,6 +4,9 @@ export interface ShaderUniforms {
   u_chromatic_offset: number;
   u_motion_blur_weight: number;
   u_noise_density: number;
+  u_noise_enabled: number;   // 1.0 = on, 0.0 = off
+  u_flip_v: number;          // 1.0 = flip vertical
+  u_flip_h: number;          // 1.0 = flip horizontal
 }
 
 export interface AnalysisResult {

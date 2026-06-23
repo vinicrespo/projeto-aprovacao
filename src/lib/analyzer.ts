@@ -63,6 +63,9 @@ function buildRecommendedProfile(
     u_chromatic_offset: 0.25,
     u_motion_blur_weight: Math.min(motionIntensity * 1.5, 0.6),
     u_noise_density: Math.min(artifactScore * 1.2, 0.8),
+    u_noise_enabled: artifactScore > 0.1 ? 1 : 0,
+    u_flip_v: 0,
+    u_flip_h: 0,
   };
 }
 

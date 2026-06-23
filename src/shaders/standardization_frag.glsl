@@ -8,6 +8,9 @@ uniform float u_contrast_curve;
 uniform float u_chromatic_offset;
 uniform float u_motion_blur_weight;
 uniform float u_noise_density;
+uniform float u_noise_enabled;
+uniform float u_flip_v;
+uniform float u_flip_h;
 
 in vec2 v_texcoord;
 out vec4 fragColor;
@@ -83,6 +86,10 @@ float grainDither(vec2 uv, float density, float time) {
 void main() {
   vec2 uv = v_texcoord;
 
+  // Manual flip controls
+  if (u_flip_v > 0.5) uv.y = 1.0 - uv.y;
+  if (u_flip_h > 0.5) uv.x = 1.0 - uv.x;
+
   // 1. Chromatic correction pass
   vec3 color = chromaticAberration(u_texture, uv, u_chromatic_offset);
 
@@ -100,8 +107,8 @@ void main() {
   // 5. Temporal motion smoothing
   color = temporalBlend(color, uv, u_motion_blur_weight);
 
-  // 6. Procedural dithering over compression artifacts
-  float grain = grainDither(uv, u_noise_density, u_time);
+  // 6. Procedural dithering over compression artifacts (toggleable)
+  float grain = grainDither(uv, u_noise_density, u_time) * u_noise_enabled;
   color += grain;
 
   fragColor = vec4(clamp(color, 0.0, 1.0), 1.0);

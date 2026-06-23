@@ -1,6 +1,7 @@
 export interface AudioProcessorOptions {
   invertPhase?: boolean;
   lowPassHz?: number;
+  monitorVolume?: number; // 0–1, default 1 (audível no preview)
 }
 
 export class AudioProcessor {
@@ -13,6 +14,7 @@ export class AudioProcessor {
   private splitter: ChannelSplitterNode;
   private lowPass: BiquadFilterNode;
   private destination: MediaStreamAudioDestinationNode;
+  private monitorGain: GainNode;
 
   constructor(options: AudioProcessorOptions = {}) {
     this.ctx = new AudioContext();
@@ -40,6 +42,10 @@ export class AudioProcessor {
     this.lowPass.Q.value = 0.7;
 
     this.destination = this.ctx.createMediaStreamDestination();
+
+    // Monitor gain: routes processed audio to speakers for preview
+    this.monitorGain = this.ctx.createGain();
+    this.monitorGain.gain.value = options.monitorVolume ?? 1;
   }
 
   connect(video: HTMLMediaElement): MediaStream {
@@ -60,9 +66,11 @@ export class AudioProcessor {
     this.splitter.connect(this.phaseInverter, 1);
     this.phaseInverter.connect(this.merger, 0, 1);
 
-    // merger → lowPass → destination
+    // merger → lowPass → destination (export stream) + monitorGain → speakers
     this.merger.connect(this.lowPass);
     this.lowPass.connect(this.destination);
+    this.lowPass.connect(this.monitorGain);
+    this.monitorGain.connect(this.ctx.destination);
 
     if (this.ctx.state === "suspended") {
       this.ctx.resume();
@@ -73,6 +81,14 @@ export class AudioProcessor {
 
   setPhaseInvert(enabled: boolean) {
     this.phaseInverter.gain.value = enabled ? -1 : 1;
+  }
+
+  setMonitorVolume(v: number) {
+    this.monitorGain.gain.value = Math.max(0, Math.min(1, v));
+  }
+
+  setMuted(muted: boolean) {
+    this.monitorGain.gain.value = muted ? 0 : 1;
   }
 
   setLowPassFrequency(hz: number) {

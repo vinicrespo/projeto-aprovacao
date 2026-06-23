@@ -81,6 +81,9 @@ void main() { fragColor = texture(u_texture, v_texcoord); }`;
     gl.uniform1f(loc("u_chromatic_offset"), u.u_chromatic_offset);
     gl.uniform1f(loc("u_motion_blur_weight"), u.u_motion_blur_weight);
     gl.uniform1f(loc("u_noise_density"), u.u_noise_density);
+    gl.uniform1f(loc("u_noise_enabled"), u.u_noise_enabled);
+    gl.uniform1f(loc("u_flip_v"), u.u_flip_v);
+    gl.uniform1f(loc("u_flip_h"), u.u_flip_h);
 
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, texCurrentRef.current);

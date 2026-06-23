@@ -73,7 +73,10 @@ export function uploadVideoTexture(
   video: HTMLVideoElement
 ) {
   gl.bindTexture(gl.TEXTURE_2D, tex);
+  // Flip Y so video appears right-side up (WebGL origin is bottom-left)
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
 }
 
 export function createTexture(gl: WebGL2RenderingContext): WebGLTexture {

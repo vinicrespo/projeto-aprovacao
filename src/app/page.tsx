@@ -16,6 +16,9 @@ const DEFAULT_UNIFORMS: ShaderUniforms = {
   u_chromatic_offset: 0.25,
   u_motion_blur_weight: 0.2,
   u_noise_density: 0.2,
+  u_noise_enabled: 1,
+  u_flip_v: 0,
+  u_flip_h: 0,
 };
 
 export default function DashboardPage() {
@@ -30,6 +33,8 @@ export default function DashboardPage() {
   });
   const [qaVisible, setQaVisible] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [audioMuted, setAudioMuted] = useState(false);
+  const [phaseInverted, setPhaseInverted] = useState(false);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const videoElRef = useRef<HTMLVideoElement | null>(null);
@@ -68,9 +73,37 @@ export default function DashboardPage() {
   const handleVideoReady = useCallback((video: HTMLVideoElement) => {
     videoElRef.current = video;
     if (!audioProcessorRef.current) {
-      audioProcessorRef.current = new AudioProcessor({ invertPhase: false });
+      audioProcessorRef.current = new AudioProcessor({ invertPhase: false, monitorVolume: 1 });
     }
     audioStreamRef.current = audioProcessorRef.current.connect(video);
+  }, []);
+
+  const toggleAudioMute = useCallback(() => {
+    setAudioMuted((prev) => {
+      const next = !prev;
+      audioProcessorRef.current?.setMuted(next);
+      return next;
+    });
+  }, []);
+
+  const togglePhaseInvert = useCallback(() => {
+    setPhaseInverted((prev) => {
+      const next = !prev;
+      audioProcessorRef.current?.setPhaseInvert(next);
+      return next;
+    });
+  }, []);
+
+  const toggleNoise = useCallback(() => {
+    setUniforms((u) => ({ ...u, u_noise_enabled: u.u_noise_enabled > 0.5 ? 0 : 1 }));
+  }, []);
+
+  const toggleFlipV = useCallback(() => {
+    setUniforms((u) => ({ ...u, u_flip_v: u.u_flip_v > 0.5 ? 0 : 1 }));
+  }, []);
+
+  const toggleFlipH = useCallback(() => {
+    setUniforms((u) => ({ ...u, u_flip_h: u.u_flip_h > 0.5 ? 0 : 1 }));
   }, []);
 
   const handleExport = useCallback(async () => {
@@ -236,35 +269,86 @@ export default function DashboardPage() {
                 canvasRef={canvasRef}
               />
 
-              <div className="flex items-center gap-3">
+              {/* Controls bar */}
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   onClick={() => { setVideoFile(null); setAnalysis(null); }}
                   className="text-sm px-4 py-2 rounded-lg bg-white/5 text-white/60
                              hover:bg-white/10 transition-colors"
                 >
-                  ← Trocar vídeo
+                  ← Trocar
                 </button>
+
+                {/* Divider */}
+                <div className="w-px h-6 bg-white/10" />
+
+                {/* Audio monitor toggle */}
+                <ToggleChip
+                  active={!audioMuted}
+                  onClick={toggleAudioMute}
+                  icon={audioMuted ? "🔇" : "🔊"}
+                  label={audioMuted ? "Áudio Mudo" : "Áudio Ativo"}
+                />
+
+                {/* Phase invert toggle */}
+                <ToggleChip
+                  active={phaseInverted}
+                  onClick={togglePhaseInvert}
+                  icon="↕"
+                  label="Inverter Fase"
+                  activeColor="amber"
+                />
+
+                {/* Noise toggle */}
+                <ToggleChip
+                  active={uniforms.u_noise_enabled > 0.5}
+                  onClick={toggleNoise}
+                  icon="⬛"
+                  label="Ruído/Dither"
+                />
+
+                {/* Divider */}
+                <div className="w-px h-6 bg-white/10" />
+
+                {/* Flip controls */}
+                <ToggleChip
+                  active={uniforms.u_flip_v > 0.5}
+                  onClick={toggleFlipV}
+                  icon="↕"
+                  label="Flip Vertical"
+                  activeColor="violet"
+                />
+                <ToggleChip
+                  active={uniforms.u_flip_h > 0.5}
+                  onClick={toggleFlipH}
+                  icon="↔"
+                  label="Flip Horizontal"
+                  activeColor="violet"
+                />
+
+                {/* Divider */}
+                <div className="w-px h-6 bg-white/10" />
 
                 {!isExporting ? (
                   <button
                     onClick={handleExport}
-                    className="text-sm px-6 py-2 rounded-lg bg-brand-500 text-white font-medium
+                    className="text-sm px-5 py-2 rounded-lg bg-brand-500 text-white font-medium
                                hover:bg-brand-600 transition-colors flex items-center gap-2"
                   >
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                         d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                     </svg>
-                    Exportar Ativo Padronizado
+                    Exportar
                   </button>
                 ) : (
                   <button
                     onClick={stopExport}
-                    className="text-sm px-6 py-2 rounded-lg bg-red-500/80 text-white font-medium
+                    className="text-sm px-5 py-2 rounded-lg bg-red-500/80 text-white font-medium
                                hover:bg-red-600 transition-colors flex items-center gap-2"
                   >
                     <div className="w-3 h-3 rounded-sm bg-white" />
-                    Parar Gravação
+                    Parar
                   </button>
                 )}
 
@@ -299,6 +383,35 @@ export default function DashboardPage() {
         info={diagnostic}
       />
     </div>
+  );
+}
+
+function ToggleChip({
+  active,
+  onClick,
+  icon,
+  label,
+  activeColor = "brand",
+}: {
+  active: boolean;
+  onClick: () => void;
+  icon: string;
+  label: string;
+  activeColor?: "brand" | "amber" | "violet";
+}) {
+  const colors = {
+    brand:  active ? "bg-brand-500/20 border-brand-500/50 text-brand-400" : "bg-white/5 border-white/10 text-white/40",
+    amber:  active ? "bg-amber-500/20 border-amber-500/50 text-amber-400" : "bg-white/5 border-white/10 text-white/40",
+    violet: active ? "bg-violet-500/20 border-violet-500/50 text-violet-400" : "bg-white/5 border-white/10 text-white/40",
+  };
+  return (
+    <button
+      onClick={onClick}
+      className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-all ${colors[activeColor]}`}
+    >
+      <span>{icon}</span>
+      <span>{label}</span>
+    </button>
   );
 }
 
