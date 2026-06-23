@@ -6,7 +6,8 @@ import { createProgram, setupFullscreenQuad, uploadVideoTexture, createTexture }
 export interface PreviewCanvasHandle {
   pauseLoop: () => void;
   resumeLoop: () => void;
-  renderNow: () => void; // render exactly one frame on demand (used by exporter)
+  renderNow: () => void;  // render one frame on demand (used by exporter)
+  syncGPU: () => void;    // blocks until GPU finishes — call before VideoFrame capture
 }
 
 interface Props {
@@ -121,6 +122,7 @@ export const PreviewCanvas = forwardRef<PreviewCanvasHandle, Props>(function Pre
     pauseLoop: () => { pausedRef.current = true; },
     resumeLoop: () => { pausedRef.current = false; },
     renderNow: renderCore,
+    syncGPU: () => { glRef.current?.finish(); }, // force GPU-CPU sync before frame capture
   }), [renderCore]);
 
   useEffect(() => {

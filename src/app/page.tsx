@@ -59,7 +59,6 @@ function App() {
   const audioProcessorRef = useRef<AudioProcessor | null>(null);
   const audioStreamRef = useRef<MediaStream | null>(null);
   const cancelExportRef = useRef<{ cancelled: boolean }>({ cancelled: false });
-  const [exportDone, setExportDone] = useState(false);
 
   const { presets, addPreset, deletePreset } = useLocalStoragePresets();
 
@@ -150,6 +149,12 @@ function App() {
     setExportProgress(0);
     setExportDone(false);
 
+    const cleanup = () => {
+      setExportProgress(null);
+      setUniforms((u) => ({ ...u, u_hash_seed: 0 }));
+      audioProcessorRef.current?.setMuted(audioMuted);
+    };
+
     try {
       const blob = await exportMp4({
         canvas,
@@ -158,6 +163,7 @@ function App() {
         compressorThreshold,
         invertPhase: phaseInverted,
         renderNow: preview.renderNow,
+        syncGPU: preview.syncGPU,
         pauseLoop: preview.pauseLoop,
         resumeLoop: preview.resumeLoop,
         onProgress: setExportProgress,
@@ -166,26 +172,17 @@ function App() {
 
       if (blob && !cancelExportRef.current.cancelled) {
         const fname = randomizedFilename(videoFile.name);
+        // Close modal BEFORE triggering download so browser's save dialog
+        // doesn't appear while the progress modal is still visible
+        cleanup();
         downloadBlob(blob, fname);
-        setExportDone(true);
-        // Auto-close modal after 2s and restore state
-        setTimeout(() => {
-          setExportProgress(null);
-          setExportDone(false);
-          setUniforms((u) => ({ ...u, u_hash_seed: 0 }));
-          audioProcessorRef.current?.setMuted(audioMuted);
-        }, 2000);
       } else {
-        setUniforms((u) => ({ ...u, u_hash_seed: 0 }));
-        audioProcessorRef.current?.setMuted(audioMuted);
-        setExportProgress(null);
+        cleanup();
         if (!blob) alert("Use o Chrome para exportar MP4 (WebCodecs necessário).");
       }
     } catch (e) {
       console.error("Export failed:", e);
-      setUniforms((u) => ({ ...u, u_hash_seed: 0 }));
-      audioProcessorRef.current?.setMuted(audioMuted);
-      setExportProgress(null);
+      cleanup();
     }
   }, [videoFile, audioMuted, compressorThreshold, phaseInverted]);
 
@@ -199,7 +196,7 @@ function App() {
   return (
     <div className="min-h-screen flex flex-col">
       {exportProgress !== null && (
-        <ExportModal progress={exportProgress} done={exportDone} onCancel={cancelExport} />
+        <ExportModal progress={exportProgress} done={false} onCancel={cancelExport} />
       )}
 
       {/* Header */}

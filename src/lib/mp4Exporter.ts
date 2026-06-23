@@ -4,9 +4,10 @@ export interface Mp4ExportOptions {
   videoFile: File;
   compressorThreshold: number;
   invertPhase: boolean;
-  renderNow: () => void;       // WebGL render-on-demand from PreviewCanvas
-  pauseLoop: () => void;       // pause preview RAF during export
-  resumeLoop: () => void;      // resume preview RAF after export
+  renderNow: () => void;
+  syncGPU: () => void;     // gl.finish() — blocks until GPU done
+  pauseLoop: () => void;
+  resumeLoop: () => void;
   onProgress: (ratio: number) => void;
   cancelRef: { cancelled: boolean };
 }
@@ -64,25 +65,31 @@ async function processAudioOffline(
 }
 
 export async function exportMp4(opts: Mp4ExportOptions): Promise<Blob | null> {
-  const { canvas, video, videoFile, compressorThreshold, invertPhase,
-          renderNow, pauseLoop, resumeLoop, onProgress, cancelRef } = opts;
+  const {
+    canvas, video, videoFile,
+    compressorThreshold, invertPhase,
+    renderNow, syncGPU, pauseLoop, resumeLoop,
+    onProgress, cancelRef,
+  } = opts;
 
   if (!webCodecsAvailable()) return null;
 
-  // Pause the preview RAF so it doesn't interfere with our frame captures
+  // Stop preview RAF — we own the canvas during export
   pauseLoop();
 
   try {
     const { Muxer, ArrayBufferTarget } = await import("mp4-muxer");
 
-    const width = video.videoWidth || 1280;
+    const width  = video.videoWidth  || 1280;
     const height = video.videoHeight || 720;
     const sampleRate = 44100;
 
     onProgress(0.02);
 
-    // --- Audio (offline, fast) ---
-    const renderedAudio = await processAudioOffline(videoFile, compressorThreshold, invertPhase);
+    // ── Audio (processed offline — fast) ──────────────────────────────────
+    const renderedAudio = await processAudioOffline(
+      videoFile, compressorThreshold, invertPhase
+    );
     if (cancelRef.cancelled) return null;
     onProgress(0.12);
 
@@ -100,16 +107,23 @@ export async function exportMp4(opts: Mp4ExportOptions): Promise<Blob | null> {
       output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
       error: (e) => console.error("AudioEncoder:", e),
     });
-    audioEncoder.configure({ codec: "mp4a.40.2", sampleRate, numberOfChannels: 2, bitrate: 192_000 });
+    audioEncoder.configure({
+      codec: "mp4a.40.2",
+      sampleRate,
+      numberOfChannels: 2,
+      bitrate: 192_000,
+    });
 
     const CHUNK = 1024;
-    const total = renderedAudio.length;
+    const totalSamples = renderedAudio.length;
     const ch0 = renderedAudio.getChannelData(0);
-    const ch1 = renderedAudio.numberOfChannels > 1 ? renderedAudio.getChannelData(1) : ch0;
+    const ch1 = renderedAudio.numberOfChannels > 1
+      ? renderedAudio.getChannelData(1)
+      : ch0;
 
-    for (let i = 0; i < total; i += CHUNK) {
+    for (let i = 0; i < totalSamples; i += CHUNK) {
       if (cancelRef.cancelled) { audioEncoder.close(); return null; }
-      const end = Math.min(i + CHUNK, total);
+      const end    = Math.min(i + CHUNK, totalSamples);
       const frames = end - i;
       const planar = new Float32Array(frames * 2);
       planar.set(ch0.subarray(i, end), 0);
@@ -128,84 +142,77 @@ export async function exportMp4(opts: Mp4ExportOptions): Promise<Blob | null> {
     await audioEncoder.flush();
     audioEncoder.close();
 
-    onProgress(0.2);
+    onProgress(0.18);
     if (cancelRef.cancelled) return null;
 
-    // --- Video (requestVideoFrameCallback + explicit WebGL render) ---
+    // ── Video (frame-by-frame seek — reliable, every frame guaranteed) ────
     const videoEncoder = new VideoEncoder({
       output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
       error: (e) => console.error("VideoEncoder:", e),
     });
     videoEncoder.configure({
-      codec: "avc1.4d001f",
+      codec: "avc1.4d001f",           // H.264 Main Profile Level 3.1
       width, height,
       bitrate: 8_000_000,
       framerate: 30,
-      hardwareAcceleration: "prefer-hardware",
-      avc: { format: "avc" },
+      hardwareAcceleration: "no-preference", // software encoder = reliable
+      avc: { format: "avc" },                // AVCC format for MP4 container
     });
 
-    const duration = video.duration;
-    let frameIndex = 0;
+    const duration    = video.duration;
+    const fps         = 30;
+    const totalFrames = Math.ceil(duration * fps);
 
-    // Disable loop so video.onended fires naturally
-    video.loop = false;
-    video.currentTime = 0;
+    // Helper: seek to a time and wait for the video to settle
+    const seekTo = (t: number) =>
+      new Promise<void>((res) => {
+        if (Math.abs(video.currentTime - t) < 0.001) { res(); return; }
+        const handler = () => { video.removeEventListener("seeked", handler); res(); };
+        video.addEventListener("seeked", handler);
+        video.currentTime = t;
+      });
 
-    await new Promise<void>((resolve) => {
-      if (cancelRef.cancelled) { resolve(); return; }
+    for (let fi = 0; fi < totalFrames; fi++) {
+      if (cancelRef.cancelled) { videoEncoder.close(); return null; }
 
-      const onEnded = () => { cleanup(); resolve(); };
-      const cleanup = () => {
-        video.removeEventListener("ended", onEnded);
-      };
-      video.addEventListener("ended", onEnded, { once: true });
+      const t = fi / fps;
+      await seekTo(t);
 
-      // Safety: if ended never fires (e.g. very short clip), bail after duration + 4s
-      const safety = setTimeout(() => { cleanup(); resolve(); }, duration * 1000 + 4000);
-      // Keep reference so we can clear it
-      video.addEventListener("ended", () => clearTimeout(safety), { once: true });
+      // Render this exact frame through WebGL
+      renderNow();
 
-      const captureFrame = (_now: number, meta: VideoFrameCallbackMetadata) => {
-        if (cancelRef.cancelled) { resolve(); return; }
+      // gl.finish() blocks JS until the GPU has completed the draw call
+      // This guarantees the canvas has the correct pixels before VideoFrame reads it
+      syncGPU();
 
-        // Tell WebGL to render this exact video frame right now
-        renderNow();
+      const tsUs = Math.round(t * 1_000_000);
+      const vf   = new VideoFrame(canvas, { timestamp: tsUs });
+      const isKeyframe = fi % 30 === 0; // keyframe every 1 second
+      videoEncoder.encode(vf, { keyFrame: isKeyframe });
+      vf.close();
 
-        // One microtask tick so WebGL pipeline flushes before we capture
-        requestAnimationFrame(() => {
-          const tsUs = Math.round(meta.mediaTime * 1_000_000);
-          try {
-            const vf = new VideoFrame(canvas, { timestamp: tsUs });
-            videoEncoder.encode(vf, { keyFrame: frameIndex % 60 === 0 });
-            vf.close();
-          } catch (e) {
-            console.warn("VideoFrame capture error:", e);
-          }
-          frameIndex++;
-          onProgress(0.2 + Math.min(meta.mediaTime / duration, 1) * 0.8);
-
-          if (!video.ended && !cancelRef.cancelled) {
-            video.requestVideoFrameCallback(captureFrame);
-          }
+      // Throttle: if encoder queue is building up, yield to let it drain
+      if (videoEncoder.encodeQueueSize > 10) {
+        await new Promise<void>((r) => {
+          videoEncoder.ondequeue = () => { videoEncoder.ondequeue = null; r(); };
         });
-      };
+      }
 
-      video.requestVideoFrameCallback(captureFrame);
-      video.play().catch(() => resolve());
-    });
+      onProgress(0.18 + (fi / totalFrames) * 0.8);
+    }
 
     if (cancelRef.cancelled) { videoEncoder.close(); return null; }
 
     await videoEncoder.flush();
     videoEncoder.close();
-    muxer.finalize();
 
+    muxer.finalize();
     onProgress(1);
+
     return new Blob([target.buffer], { type: "video/mp4" });
 
   } finally {
-    // Always restore preview: re-enable loop and resume RAF
+    // Always restore preview regardless of success/cancel/error
     video.loop = true;
     video.play().catch(() => {});
     resumeLoop();
