@@ -20,5 +20,5 @@ export function randomizedFilename(original: string): string {
   const base = original
     .replace(/\.[^.]+$/, "")          // strip any extension
     .replace(/[^a-zA-Z0-9_-]/g, "_"); // sanitize
-  return `${base}_${suffix}.webm`;
+  return `${base}_${suffix}.mp4`;
 }

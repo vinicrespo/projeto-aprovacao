@@ -12,6 +12,7 @@ import { AudioProcessor } from "@/lib/audioProcessor";
 import { downloadBlob } from "@/lib/exporter";
 import { newHashSeed, randomizedFilename } from "@/lib/hashBuster";
 import { ExportModal } from "@/components/ExportModal";
+import { exportMp4 } from "@/lib/mp4Exporter";
 
 const DEFAULT_UNIFORMS: ShaderUniforms = {
   u_time: 0,
@@ -56,8 +57,7 @@ function App() {
   const videoElRef = useRef<HTMLVideoElement | null>(null);
   const audioProcessorRef = useRef<AudioProcessor | null>(null);
   const audioStreamRef = useRef<MediaStream | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
+  const cancelExportRef = useRef<{ cancelled: boolean }>({ cancelled: false });
   const progressRafRef = useRef<number>(0);
 
   const { presets, addPreset, deletePreset } = useLocalStoragePresets();
@@ -137,65 +137,44 @@ function App() {
 
   const handleExport = useCallback(async () => {
     const canvas = canvasRef.current;
-    const audioStream = audioStreamRef.current;
     const video = videoElRef.current;
-    if (!canvas || !audioStream || !video) return;
+    if (!canvas || !video || !videoFile) return;
 
-    // Mute speakers during processing so user doesn't hear the replay
+    // Mute speakers during processing
     audioProcessorRef.current?.setMuted(true);
 
     const seed = newHashSeed();
     setUniforms((u) => ({ ...u, u_hash_seed: seed }));
+    cancelExportRef.current = { cancelled: false };
     setExportProgress(0);
-    chunksRef.current = [];
 
-    const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")
-      ? "video/webm;codecs=vp9,opus"
-      : "video/webm";
+    try {
+      const blob = await exportMp4({
+        canvas,
+        video,
+        videoFile,
+        compressorThreshold,
+        invertPhase: phaseInverted,
+        hashSeed: seed,
+        onProgress: setExportProgress,
+        cancelRef: cancelExportRef.current,
+      });
 
-    const canvasStream = canvas.captureStream(30);
-    const combined = new MediaStream([
-      ...canvasStream.getVideoTracks(),
-      ...audioStream.getAudioTracks(),
-    ]);
-
-    const recorder = new MediaRecorder(combined, { mimeType, videoBitsPerSecond: 8_000_000 });
-    mediaRecorderRef.current = recorder;
-
-    recorder.ondataavailable = (e) => {
-      if (e.data.size > 0) chunksRef.current.push(e.data);
-    };
-
-    recorder.onstop = async () => {
-      cancelAnimationFrame(progressRafRef.current);
-      const blob = new Blob(chunksRef.current, { type: mimeType });
-      const fname = randomizedFilename(videoFile?.name ?? "criativo");
-      downloadBlob(blob, fname);
+      if (blob && !cancelExportRef.current.cancelled) {
+        const fname = randomizedFilename(videoFile.name);
+        downloadBlob(blob, fname);
+      } else if (!blob) {
+        alert("Seu navegador não suporta WebCodecs. Use o Chrome para exportar MP4.");
+      }
+    } finally {
       setUniforms((u) => ({ ...u, u_hash_seed: 0 }));
-      // Restore speaker output if was on before
       audioProcessorRef.current?.setMuted(audioMuted);
       setExportProgress(null);
-    };
-
-    // Track progress via video.currentTime
-    const trackProgress = () => {
-      if (!video.duration) return;
-      setExportProgress(video.currentTime / video.duration);
-      progressRafRef.current = requestAnimationFrame(trackProgress);
-    };
-
-    video.currentTime = 0;
-    video.play();
-    recorder.start(200);
-    progressRafRef.current = requestAnimationFrame(trackProgress);
-
-    video.onended = () => recorder.stop();
-    const safetyMs = video.duration * 1000 + 2000;
-    setTimeout(() => { if (recorder.state === "recording") recorder.stop(); }, safetyMs);
-  }, [videoFile, audioMuted]);
+    }
+  }, [videoFile, audioMuted, compressorThreshold, phaseInverted]);
 
   const cancelExport = useCallback(() => {
-    mediaRecorderRef.current?.stop();
+    cancelExportRef.current.cancelled = true;
   }, []);
 
   return (
