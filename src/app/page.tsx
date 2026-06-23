@@ -10,7 +10,7 @@ import { useLocalStoragePresets } from "@/hooks/useLocalStoragePresets";
 import { analyzeVideo } from "@/lib/analyzer";
 import { AudioProcessor } from "@/lib/audioProcessor";
 import { downloadBlob } from "@/lib/exporter";
-import { newHashSeed, injectHashNoise, randomizedFilename } from "@/lib/hashBuster";
+import { newHashSeed, randomizedFilename } from "@/lib/hashBuster";
 import { ExportModal } from "@/components/ExportModal";
 
 const DEFAULT_UNIFORMS: ShaderUniforms = {
@@ -168,9 +168,8 @@ function App() {
 
     recorder.onstop = async () => {
       cancelAnimationFrame(progressRafRef.current);
-      let blob = new Blob(chunksRef.current, { type: mimeType });
-      blob = await injectHashNoise(blob);
-      const fname = randomizedFilename(videoFile?.name ?? "criativo.webm");
+      const blob = new Blob(chunksRef.current, { type: mimeType });
+      const fname = randomizedFilename(videoFile?.name ?? "criativo");
       downloadBlob(blob, fname);
       setUniforms((u) => ({ ...u, u_hash_seed: 0 }));
       // Restore speaker output if was on before
