@@ -148,7 +148,6 @@ function App() {
     setUniforms((u) => ({ ...u, u_hash_seed: seed }));
     cancelExportRef.current = { cancelled: false };
     setExportProgress(0);
-    setExportDone(false);
 
     const cleanup = () => {
       setExportProgress(null);
