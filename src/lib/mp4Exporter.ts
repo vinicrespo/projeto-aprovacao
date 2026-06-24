@@ -192,7 +192,7 @@ export async function exportMp4(opts: Mp4ExportOptions): Promise<Blob | null> {
 
       video.onended = () => { clearTimeout(safetyTimer); done(); };
 
-      const captureFrame = async (
+      const captureFrame = (
         _now: DOMHighResTimeStamp,
         metadata: { mediaTime: number }
       ) => {
@@ -212,21 +212,10 @@ export async function exportMp4(opts: Mp4ExportOptions): Promise<Blob | null> {
             lastTsUs = tsUs;
 
             onProgress(0.18 + Math.min(metadata.mediaTime / duration, 1) * 0.79);
-
-            // Drain encoder if it's falling behind so frames aren't dropped
-            if (videoEncoder.encodeQueueSize > 8) {
-              await new Promise<void>((r) => {
-                const check = () => {
-                  if (videoEncoder.encodeQueueSize <= 4) { r(); }
-                  else { setTimeout(check, 10); }
-                };
-                check();
-              });
-            }
           }
 
-          // Always schedule next frame — only video.onended stops the loop
-          if (!finished) video.requestVideoFrameCallback(captureFrame);
+          // Only video.onended stops the loop — never rely on duration estimate
+          video.requestVideoFrameCallback(captureFrame);
         } catch (e) {
           clearTimeout(safetyTimer);
           reject(e);
