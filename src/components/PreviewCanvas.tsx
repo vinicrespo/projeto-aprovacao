@@ -6,8 +6,8 @@ import { createProgram, setupFullscreenQuad, uploadVideoTexture, createTexture }
 export interface PreviewCanvasHandle {
   pauseLoop: () => void;
   resumeLoop: () => void;
-  renderNow: () => void;  // render one frame on demand (used by exporter)
-  syncGPU: () => void;    // blocks until GPU finishes — call before VideoFrame capture
+  renderNow: () => void;
+  syncGPU: () => void;
 }
 
 interface Props {
@@ -16,6 +16,21 @@ interface Props {
   onDiagnostic?: (info: DiagnosticInfo) => void;
   onVideoReady?: (el: HTMLVideoElement) => void;
   canvasRef?: React.RefObject<HTMLCanvasElement | null>;
+}
+
+// Cached uniform locations — populated once after shader compilation
+interface UniformLocs {
+  u_time: WebGLUniformLocation | null;
+  u_contrast_curve: WebGLUniformLocation | null;
+  u_chromatic_offset: WebGLUniformLocation | null;
+  u_motion_blur_weight: WebGLUniformLocation | null;
+  u_noise_density: WebGLUniformLocation | null;
+  u_noise_enabled: WebGLUniformLocation | null;
+  u_flip_v: WebGLUniformLocation | null;
+  u_flip_h: WebGLUniformLocation | null;
+  u_hash_seed: WebGLUniformLocation | null;
+  u_texture: WebGLUniformLocation | null;
+  u_prev_texture: WebGLUniformLocation | null;
 }
 
 const FRAG_GLSL_PATH = "/standardization_frag.glsl";
@@ -32,6 +47,7 @@ export const PreviewCanvas = forwardRef<PreviewCanvasHandle, Props>(function Pre
   const vaoRef = useRef<WebGLVertexArrayObject | null>(null);
   const texCurrentRef = useRef<WebGLTexture | null>(null);
   const texPrevRef = useRef<WebGLTexture | null>(null);
+  const locsRef = useRef<UniformLocs | null>(null); // cached uniform locations
   const rafRef = useRef<number>(0);
   const pausedRef = useRef(false);
   const uniformsRef = useRef(uniforms);
@@ -54,18 +70,33 @@ export const PreviewCanvas = forwardRef<PreviewCanvasHandle, Props>(function Pre
     vaoRef.current = setupFullscreenQuad(gl, program);
     texCurrentRef.current = createTexture(gl);
     texPrevRef.current = createTexture(gl);
+
+    // Cache all uniform locations once — getUniformLocation is a driver call,
+    // calling it every frame causes significant overhead and frame drops during export
+    locsRef.current = {
+      u_time:               gl.getUniformLocation(program, "u_time"),
+      u_contrast_curve:     gl.getUniformLocation(program, "u_contrast_curve"),
+      u_chromatic_offset:   gl.getUniformLocation(program, "u_chromatic_offset"),
+      u_motion_blur_weight: gl.getUniformLocation(program, "u_motion_blur_weight"),
+      u_noise_density:      gl.getUniformLocation(program, "u_noise_density"),
+      u_noise_enabled:      gl.getUniformLocation(program, "u_noise_enabled"),
+      u_flip_v:             gl.getUniformLocation(program, "u_flip_v"),
+      u_flip_h:             gl.getUniformLocation(program, "u_flip_h"),
+      u_hash_seed:          gl.getUniformLocation(program, "u_hash_seed"),
+      u_texture:            gl.getUniformLocation(program, "u_texture"),
+      u_prev_texture:       gl.getUniformLocation(program, "u_prev_texture"),
+    };
   }, []);
 
-  // Pure WebGL draw — no RAF scheduling, no canvas resize side-effects
   const renderCore = useCallback(() => {
     const gl = glRef.current;
     const program = programRef.current;
     const vao = vaoRef.current;
     const video = videoRef.current;
     const canvas = canvasRef.current;
-    if (!gl || !program || !vao || !video || !canvas || video.readyState < 2) return;
+    const locs = locsRef.current;
+    if (!gl || !program || !vao || !video || !canvas || !locs || video.readyState < 2) return;
 
-    // Only resize canvas when video dimensions actually change (resize clears canvas!)
     const vw = video.videoWidth || 1280;
     const vh = video.videoHeight || 720;
     if (canvasSizeRef.current.w !== vw || canvasSizeRef.current.h !== vh) {
@@ -81,24 +112,23 @@ export const PreviewCanvas = forwardRef<PreviewCanvasHandle, Props>(function Pre
     gl.bindVertexArray(vao);
 
     const u = uniformsRef.current;
-    const loc = (n: string) => gl.getUniformLocation(program, n);
-    gl.uniform1f(loc("u_time"), performance.now() / 1000);
-    gl.uniform1f(loc("u_contrast_curve"), u.u_contrast_curve);
-    gl.uniform1f(loc("u_chromatic_offset"), u.u_chromatic_offset);
-    gl.uniform1f(loc("u_motion_blur_weight"), u.u_motion_blur_weight);
-    gl.uniform1f(loc("u_noise_density"), u.u_noise_density);
-    gl.uniform1f(loc("u_noise_enabled"), u.u_noise_enabled);
-    gl.uniform1f(loc("u_flip_v"), u.u_flip_v);
-    gl.uniform1f(loc("u_flip_h"), u.u_flip_h);
-    gl.uniform1f(loc("u_hash_seed"), u.u_hash_seed);
+    gl.uniform1f(locs.u_time,               performance.now() / 1000);
+    gl.uniform1f(locs.u_contrast_curve,     u.u_contrast_curve);
+    gl.uniform1f(locs.u_chromatic_offset,   u.u_chromatic_offset);
+    gl.uniform1f(locs.u_motion_blur_weight, u.u_motion_blur_weight);
+    gl.uniform1f(locs.u_noise_density,      u.u_noise_density);
+    gl.uniform1f(locs.u_noise_enabled,      u.u_noise_enabled);
+    gl.uniform1f(locs.u_flip_v,             u.u_flip_v);
+    gl.uniform1f(locs.u_flip_h,             u.u_flip_h);
+    gl.uniform1f(locs.u_hash_seed,          u.u_hash_seed);
 
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, texCurrentRef.current);
-    gl.uniform1i(loc("u_texture"), 0);
+    gl.uniform1i(locs.u_texture, 0);
 
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, texPrevRef.current);
-    gl.uniform1i(loc("u_prev_texture"), 1);
+    gl.uniform1i(locs.u_prev_texture, 1);
 
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     gl.bindVertexArray(null);
@@ -112,7 +142,6 @@ export const PreviewCanvas = forwardRef<PreviewCanvasHandle, Props>(function Pre
     }
   }, [canvasRef, onDiagnostic]);
 
-  // RAF loop — calls renderCore each tick unless paused
   const render = useCallback(() => {
     if (!pausedRef.current) renderCore();
     rafRef.current = requestAnimationFrame(render);
@@ -122,7 +151,7 @@ export const PreviewCanvas = forwardRef<PreviewCanvasHandle, Props>(function Pre
     pauseLoop: () => { pausedRef.current = true; },
     resumeLoop: () => { pausedRef.current = false; },
     renderNow: renderCore,
-    syncGPU: () => { glRef.current?.finish(); }, // force GPU-CPU sync before frame capture
+    syncGPU: () => { glRef.current?.finish(); },
   }), [renderCore]);
 
   useEffect(() => {
@@ -131,6 +160,7 @@ export const PreviewCanvas = forwardRef<PreviewCanvasHandle, Props>(function Pre
 
     pausedRef.current = false;
     canvasSizeRef.current = { w: 0, h: 0 };
+    locsRef.current = null;
 
     const video = document.createElement("video");
     video.muted = false;
