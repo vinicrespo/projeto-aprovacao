@@ -5,7 +5,7 @@ export interface Mp4ExportOptions {
   compressorThreshold: number;
   invertPhase: boolean;
   renderNow: () => void;
-  syncGPU: () => void;     // gl.finish() — blocks until GPU done
+  syncGPU: () => void;
   pauseLoop: () => void;
   resumeLoop: () => void;
   onProgress: (ratio: number) => void;
@@ -74,8 +74,11 @@ export async function exportMp4(opts: Mp4ExportOptions): Promise<Blob | null> {
 
   if (!webCodecsAvailable()) return null;
 
-  // Stop preview RAF — we own the canvas during export
   pauseLoop();
+
+  // CRITICAL: disable loop so video.onended fires and RVFC timestamps stay monotonic
+  const wasLoop = video.loop;
+  video.loop = false;
 
   try {
     const { Muxer, ArrayBufferTarget } = await import("mp4-muxer");
@@ -86,7 +89,7 @@ export async function exportMp4(opts: Mp4ExportOptions): Promise<Blob | null> {
 
     onProgress(0.02);
 
-    // ── Audio (processed offline — fast) ──────────────────────────────────
+    // ── Audio offline processing ───────────────────────────────────────────
     const renderedAudio = await processAudioOffline(
       videoFile, compressorThreshold, invertPhase
     );
@@ -102,7 +105,7 @@ export async function exportMp4(opts: Mp4ExportOptions): Promise<Blob | null> {
       fastStart: "in-memory",
     });
 
-    // AudioEncoder
+    // Encode audio
     const audioEncoder = new AudioEncoder({
       output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
       error: (e) => console.error("AudioEncoder:", e),
@@ -145,62 +148,72 @@ export async function exportMp4(opts: Mp4ExportOptions): Promise<Blob | null> {
     onProgress(0.18);
     if (cancelRef.cancelled) return null;
 
-    // ── Video (frame-by-frame seek — reliable, every frame guaranteed) ────
+    // ── Video: play from start, capture every frame via RVFC ──────────────
     const videoEncoder = new VideoEncoder({
       output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
       error: (e) => console.error("VideoEncoder:", e),
     });
     videoEncoder.configure({
-      codec: "avc1.4d001f",           // H.264 Main Profile Level 3.1
+      codec: "avc1.4d001f",
       width, height,
       bitrate: 8_000_000,
       framerate: 30,
-      hardwareAcceleration: "no-preference", // software encoder = reliable
-      avc: { format: "avc" },                // AVCC format for MP4 container
+      hardwareAcceleration: "no-preference",
+      avc: { format: "avc" },
     });
 
     const duration = video.duration;
 
-    // Seek to beginning and play — RVFC gives us exact frame timestamps
-    video.currentTime = 0;
+    // Seek to start
     await new Promise<void>((res) => {
+      if (video.currentTime === 0) { res(); return; }
       const h = () => { video.removeEventListener("seeked", h); res(); };
       video.addEventListener("seeked", h);
+      video.currentTime = 0;
     });
+
     video.play().catch(() => {});
 
     let framesEncoded = 0;
+    let lastTsUs = -1;
 
     await new Promise<void>((resolve, reject) => {
       let finished = false;
-      const done = () => { if (!finished) { finished = true; resolve(); } };
 
-      // Safety: if video ends or stalls, finalize after duration + buffer
-      const safetyTimer = setTimeout(done, (duration + 10) * 1000);
+      const done = () => {
+        if (finished) return;
+        finished = true;
+        video.pause();
+        resolve();
+      };
+
+      // Fallback in case video stalls
+      const safetyTimer = setTimeout(done, (duration + 15) * 1000);
+
+      video.onended = () => { clearTimeout(safetyTimer); done(); };
 
       const captureFrame = (
-        _: DOMHighResTimeStamp,
-        metadata: { mediaTime: number; presentedFrames: number }
+        _now: DOMHighResTimeStamp,
+        metadata: { mediaTime: number }
       ) => {
-        if (cancelRef.cancelled || finished) { done(); return; }
+        if (cancelRef.cancelled || finished) { clearTimeout(safetyTimer); done(); return; }
 
         try {
-          // Use mediaTime for exact, monotonic timestamps (microseconds)
           const tsUs = Math.round(metadata.mediaTime * 1_000_000);
 
-          // renderNow() uploads current video texture and runs WebGL shaders
-          renderNow();
+          // Skip duplicate or out-of-order timestamps (shouldn't happen with loop=false)
+          if (tsUs > lastTsUs) {
+            renderNow();
+            syncGPU(); // gl.finish() — wait for GPU before reading canvas
 
-          // gl.finish() blocks JS until GPU finishes — canvas is guaranteed ready
-          syncGPU();
+            const vf = new VideoFrame(canvas, { timestamp: tsUs });
+            videoEncoder.encode(vf, { keyFrame: framesEncoded % 60 === 0 });
+            vf.close();
+            framesEncoded++;
+            lastTsUs = tsUs;
 
-          const vf = new VideoFrame(canvas, { timestamp: tsUs });
-          videoEncoder.encode(vf, { keyFrame: framesEncoded % 60 === 0 });
-          vf.close();
-          framesEncoded++;
-
-          const progress = Math.min(metadata.mediaTime / duration, 1);
-          onProgress(0.18 + progress * 0.79);
+            onProgress(0.18 + Math.min(metadata.mediaTime / duration, 1) * 0.79);
+          }
 
           if (metadata.mediaTime >= duration - 0.05) {
             clearTimeout(safetyTimer);
@@ -215,8 +228,6 @@ export async function exportMp4(opts: Mp4ExportOptions): Promise<Blob | null> {
       };
 
       video.requestVideoFrameCallback(captureFrame);
-
-      video.onended = () => { clearTimeout(safetyTimer); done(); };
     });
 
     if (cancelRef.cancelled) { videoEncoder.close(); return null; }
@@ -231,7 +242,7 @@ export async function exportMp4(opts: Mp4ExportOptions): Promise<Blob | null> {
 
   } finally {
     video.onended = null;
-    video.loop = true;
+    video.loop = wasLoop;
     video.currentTime = 0;
     video.play().catch(() => {});
     resumeLoop();

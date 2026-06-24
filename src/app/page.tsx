@@ -136,6 +136,7 @@ function App() {
   }, []);
 
   const handleExport = useCallback(async () => {
+    if (exportProgress !== null) return; // prevent double-trigger
     const canvas = canvasRef.current;
     const video = videoElRef.current;
     const preview = previewRef.current;
@@ -184,7 +185,7 @@ function App() {
       console.error("Export failed:", e);
       cleanup();
     }
-  }, [videoFile, audioMuted, compressorThreshold, phaseInverted]);
+  }, [videoFile, audioMuted, compressorThreshold, phaseInverted, exportProgress]);
 
   const cancelExport = useCallback(() => {
     cancelExportRef.current.cancelled = true;
