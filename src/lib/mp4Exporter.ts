@@ -87,15 +87,17 @@ export async function exportMp4(opts: Mp4ExportOptions): Promise<Blob | null> {
   try {
     const { Muxer, ArrayBufferTarget } = await import("mp4-muxer");
 
-    const width       = video.videoWidth  || 1280;
-    const height      = video.videoHeight || 720;
-    const sampleRate  = 44100;
-    const duration    = video.duration;
+    const width    = video.videoWidth  || 1280;
+    const height   = video.videoHeight || 720;
+    const duration = video.duration;
 
     onProgress(0.02);
 
-    // ── Step 1: decode raw audio (no processing yet — we need video duration first) ──
+    // ── Step 1: decode raw audio — sample rate comes from the file, not hardcoded ──
     const rawAudio = await decodeAudioBuffer(videoFile);
+    // Use native sample rate so AudioData timestamps match actual playback speed.
+    // Hardcoding 44100 when file is 48000Hz causes audio to play at wrong speed.
+    const sampleRate = rawAudio.sampleRate;
     if (cancelRef.cancelled) return null;
     onProgress(0.08);
 
