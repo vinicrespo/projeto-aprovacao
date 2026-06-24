@@ -21,22 +21,27 @@ function webCodecsAvailable(): boolean {
   );
 }
 
-async function processAudioOffline(
-  file: File,
-  compressorThreshold: number,
-  invertPhase: boolean
-): Promise<AudioBuffer> {
+async function decodeAudioBuffer(file: File): Promise<AudioBuffer> {
   const buf = await file.arrayBuffer();
   const tempCtx = new AudioContext();
-  let decoded: AudioBuffer;
   try {
-    decoded = await tempCtx.decodeAudioData(buf);
+    return await tempCtx.decodeAudioData(buf);
   } finally {
     await tempCtx.close();
   }
+}
 
+function applyAudioEffects(
+  decoded: AudioBuffer,
+  compressorThreshold: number,
+  invertPhase: boolean,
+  trimSamples: number   // encode only this many samples
+): Promise<AudioBuffer> {
+  const sampleRate = decoded.sampleRate;
   const ch = Math.min(decoded.numberOfChannels, 2);
-  const offCtx = new OfflineAudioContext(ch, decoded.length, decoded.sampleRate);
+  const length = Math.min(decoded.length, trimSamples);
+
+  const offCtx = new OfflineAudioContext(ch, length, sampleRate);
   const src = offCtx.createBufferSource();
   src.buffer = decoded;
 
@@ -76,26 +81,25 @@ export async function exportMp4(opts: Mp4ExportOptions): Promise<Blob | null> {
 
   pauseLoop();
 
-  // CRITICAL: disable loop so video.onended fires and RVFC timestamps stay monotonic
   const wasLoop = video.loop;
   video.loop = false;
 
   try {
     const { Muxer, ArrayBufferTarget } = await import("mp4-muxer");
 
-    const width  = video.videoWidth  || 1280;
-    const height = video.videoHeight || 720;
-    const sampleRate = 44100;
+    const width       = video.videoWidth  || 1280;
+    const height      = video.videoHeight || 720;
+    const sampleRate  = 44100;
+    const duration    = video.duration;
 
     onProgress(0.02);
 
-    // ── Audio offline processing ───────────────────────────────────────────
-    const renderedAudio = await processAudioOffline(
-      videoFile, compressorThreshold, invertPhase
-    );
+    // ── Step 1: decode raw audio (no processing yet — we need video duration first) ──
+    const rawAudio = await decodeAudioBuffer(videoFile);
     if (cancelRef.cancelled) return null;
-    onProgress(0.12);
+    onProgress(0.08);
 
+    // ── Step 2: capture video frames via RVFC ─────────────────────────────
     const target = new ArrayBufferTarget();
     const muxer = new Muxer({
       target,
@@ -105,7 +109,104 @@ export async function exportMp4(opts: Mp4ExportOptions): Promise<Blob | null> {
       fastStart: "in-memory",
     });
 
-    // Encode audio
+    const videoEncoder = new VideoEncoder({
+      output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
+      error: (e) => console.error("VideoEncoder:", e),
+    });
+    videoEncoder.configure({
+      codec: "avc1.4d001f",
+      width, height,
+      bitrate: 8_000_000,
+      framerate: 30,
+      hardwareAcceleration: "no-preference",
+      avc: { format: "avc" },
+    });
+
+    // Seek video to start
+    await new Promise<void>((res) => {
+      if (video.currentTime === 0) { res(); return; }
+      const h = () => { video.removeEventListener("seeked", h); res(); };
+      video.addEventListener("seeked", h);
+      video.currentTime = 0;
+    });
+
+    video.play().catch(() => {});
+
+    let framesEncoded = 0;
+    let lastTsUs = 0;
+
+    await new Promise<void>((resolve, reject) => {
+      let finished = false;
+
+      const done = () => {
+        if (finished) return;
+        finished = true;
+        video.pause();
+        resolve();
+      };
+
+      // Safety timeout: if video stalls or onended never fires
+      const safetyTimer = setTimeout(done, (duration + 20) * 1000);
+
+      video.onended = () => { clearTimeout(safetyTimer); done(); };
+
+      const captureFrame = (
+        _now: DOMHighResTimeStamp,
+        metadata: { mediaTime: number }
+      ) => {
+        if (cancelRef.cancelled || finished) {
+          clearTimeout(safetyTimer);
+          done();
+          return;
+        }
+
+        try {
+          const tsUs = Math.round(metadata.mediaTime * 1_000_000);
+
+          if (tsUs > lastTsUs) {
+            renderNow();
+            syncGPU(); // gl.finish() — GPU must finish before VideoFrame reads canvas
+
+            const vf = new VideoFrame(canvas, { timestamp: tsUs });
+            videoEncoder.encode(vf, { keyFrame: framesEncoded % 60 === 0 });
+            vf.close();
+            framesEncoded++;
+            lastTsUs = tsUs;
+
+            onProgress(0.08 + Math.min(metadata.mediaTime / duration, 1) * 0.80);
+          }
+
+          // Only onended stops the loop — never rely on duration estimate
+          video.requestVideoFrameCallback(captureFrame);
+        } catch (e) {
+          clearTimeout(safetyTimer);
+          reject(e);
+        }
+      };
+
+      video.requestVideoFrameCallback(captureFrame);
+    });
+
+    if (cancelRef.cancelled) { videoEncoder.close(); return null; }
+
+    await videoEncoder.flush();
+    videoEncoder.close();
+
+    onProgress(0.90);
+
+    // ── Step 3: encode audio trimmed to actual video duration ─────────────
+    // lastTsUs is the timestamp of the last captured video frame.
+    // Audio is trimmed to this duration so audio and video end at the same time.
+    const actualDurationSec = lastTsUs / 1_000_000;
+    const trimSamples = Math.ceil(actualDurationSec * rawAudio.sampleRate);
+
+    const renderedAudio = await applyAudioEffects(
+      rawAudio, compressorThreshold, invertPhase, trimSamples
+    );
+    if (cancelRef.cancelled) return null;
+
+    onProgress(0.95);
+
     const audioEncoder = new AudioEncoder({
       output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
       error: (e) => console.error("AudioEncoder:", e),
@@ -142,93 +243,9 @@ export async function exportMp4(opts: Mp4ExportOptions): Promise<Blob | null> {
       audioEncoder.encode(ad);
       ad.close();
     }
+
     await audioEncoder.flush();
     audioEncoder.close();
-
-    onProgress(0.18);
-    if (cancelRef.cancelled) return null;
-
-    // ── Video: play from start, capture every frame via RVFC ──────────────
-    const videoEncoder = new VideoEncoder({
-      output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
-      error: (e) => console.error("VideoEncoder:", e),
-    });
-    videoEncoder.configure({
-      codec: "avc1.4d001f",
-      width, height,
-      bitrate: 8_000_000,
-      framerate: 30,
-      hardwareAcceleration: "no-preference",
-      avc: { format: "avc" },
-    });
-
-    const duration = video.duration;
-
-    // Seek to start
-    await new Promise<void>((res) => {
-      if (video.currentTime === 0) { res(); return; }
-      const h = () => { video.removeEventListener("seeked", h); res(); };
-      video.addEventListener("seeked", h);
-      video.currentTime = 0;
-    });
-
-    video.play().catch(() => {});
-
-    let framesEncoded = 0;
-    let lastTsUs = -1;
-
-    await new Promise<void>((resolve, reject) => {
-      let finished = false;
-
-      const done = () => {
-        if (finished) return;
-        finished = true;
-        video.pause();
-        resolve();
-      };
-
-      // Fallback in case video stalls
-      const safetyTimer = setTimeout(done, (duration + 15) * 1000);
-
-      video.onended = () => { clearTimeout(safetyTimer); done(); };
-
-      const captureFrame = (
-        _now: DOMHighResTimeStamp,
-        metadata: { mediaTime: number }
-      ) => {
-        if (cancelRef.cancelled || finished) { clearTimeout(safetyTimer); done(); return; }
-
-        try {
-          const tsUs = Math.round(metadata.mediaTime * 1_000_000);
-
-          if (tsUs > lastTsUs) {
-            renderNow();
-            syncGPU();
-
-            const vf = new VideoFrame(canvas, { timestamp: tsUs });
-            videoEncoder.encode(vf, { keyFrame: framesEncoded % 60 === 0 });
-            vf.close();
-            framesEncoded++;
-            lastTsUs = tsUs;
-
-            onProgress(0.18 + Math.min(metadata.mediaTime / duration, 1) * 0.79);
-          }
-
-          // Only video.onended stops the loop — never rely on duration estimate
-          video.requestVideoFrameCallback(captureFrame);
-        } catch (e) {
-          clearTimeout(safetyTimer);
-          reject(e);
-        }
-      };
-
-      video.requestVideoFrameCallback(captureFrame);
-    });
-
-    if (cancelRef.cancelled) { videoEncoder.close(); return null; }
-
-    await videoEncoder.flush();
-    videoEncoder.close();
 
     muxer.finalize();
     onProgress(1);
