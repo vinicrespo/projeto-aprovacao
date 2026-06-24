@@ -192,7 +192,7 @@ export async function exportMp4(opts: Mp4ExportOptions): Promise<Blob | null> {
 
       video.onended = () => { clearTimeout(safetyTimer); done(); };
 
-      const captureFrame = (
+      const captureFrame = async (
         _now: DOMHighResTimeStamp,
         metadata: { mediaTime: number }
       ) => {
@@ -201,10 +201,9 @@ export async function exportMp4(opts: Mp4ExportOptions): Promise<Blob | null> {
         try {
           const tsUs = Math.round(metadata.mediaTime * 1_000_000);
 
-          // Skip duplicate or out-of-order timestamps (shouldn't happen with loop=false)
           if (tsUs > lastTsUs) {
             renderNow();
-            syncGPU(); // gl.finish() — wait for GPU before reading canvas
+            syncGPU();
 
             const vf = new VideoFrame(canvas, { timestamp: tsUs });
             videoEncoder.encode(vf, { keyFrame: framesEncoded % 60 === 0 });
@@ -213,14 +212,21 @@ export async function exportMp4(opts: Mp4ExportOptions): Promise<Blob | null> {
             lastTsUs = tsUs;
 
             onProgress(0.18 + Math.min(metadata.mediaTime / duration, 1) * 0.79);
+
+            // Drain encoder if it's falling behind so frames aren't dropped
+            if (videoEncoder.encodeQueueSize > 8) {
+              await new Promise<void>((r) => {
+                const check = () => {
+                  if (videoEncoder.encodeQueueSize <= 4) { r(); }
+                  else { setTimeout(check, 10); }
+                };
+                check();
+              });
+            }
           }
 
-          if (metadata.mediaTime >= duration - 0.05) {
-            clearTimeout(safetyTimer);
-            done();
-          } else {
-            video.requestVideoFrameCallback(captureFrame);
-          }
+          // Always schedule next frame — only video.onended stops the loop
+          if (!finished) video.requestVideoFrameCallback(captureFrame);
         } catch (e) {
           clearTimeout(safetyTimer);
           reject(e);
