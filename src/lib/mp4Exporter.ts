@@ -159,47 +159,65 @@ export async function exportMp4(opts: Mp4ExportOptions): Promise<Blob | null> {
       avc: { format: "avc" },                // AVCC format for MP4 container
     });
 
-    const duration    = video.duration;
-    const fps         = 30;
-    const totalFrames = Math.ceil(duration * fps);
+    const duration = video.duration;
 
-    // Helper: seek to a time and wait for the video to settle
-    const seekTo = (t: number) =>
-      new Promise<void>((res) => {
-        if (Math.abs(video.currentTime - t) < 0.001) { res(); return; }
-        const handler = () => { video.removeEventListener("seeked", handler); res(); };
-        video.addEventListener("seeked", handler);
-        video.currentTime = t;
-      });
+    // Seek to beginning and play — RVFC gives us exact frame timestamps
+    video.currentTime = 0;
+    await new Promise<void>((res) => {
+      const h = () => { video.removeEventListener("seeked", h); res(); };
+      video.addEventListener("seeked", h);
+    });
+    video.play().catch(() => {});
 
-    for (let fi = 0; fi < totalFrames; fi++) {
-      if (cancelRef.cancelled) { videoEncoder.close(); return null; }
+    let framesEncoded = 0;
 
-      const t = fi / fps;
-      await seekTo(t);
+    await new Promise<void>((resolve, reject) => {
+      let finished = false;
+      const done = () => { if (!finished) { finished = true; resolve(); } };
 
-      // Render this exact frame through WebGL
-      renderNow();
+      // Safety: if video ends or stalls, finalize after duration + buffer
+      const safetyTimer = setTimeout(done, (duration + 10) * 1000);
 
-      // gl.finish() blocks JS until the GPU has completed the draw call
-      // This guarantees the canvas has the correct pixels before VideoFrame reads it
-      syncGPU();
+      const captureFrame = (
+        _: DOMHighResTimeStamp,
+        metadata: { mediaTime: number; presentedFrames: number }
+      ) => {
+        if (cancelRef.cancelled || finished) { done(); return; }
 
-      const tsUs = Math.round(t * 1_000_000);
-      const vf   = new VideoFrame(canvas, { timestamp: tsUs });
-      const isKeyframe = fi % 30 === 0; // keyframe every 1 second
-      videoEncoder.encode(vf, { keyFrame: isKeyframe });
-      vf.close();
+        try {
+          // Use mediaTime for exact, monotonic timestamps (microseconds)
+          const tsUs = Math.round(metadata.mediaTime * 1_000_000);
 
-      // Throttle: if encoder queue is building up, yield to let it drain
-      if (videoEncoder.encodeQueueSize > 10) {
-        await new Promise<void>((r) => {
-          videoEncoder.ondequeue = () => { videoEncoder.ondequeue = null; r(); };
-        });
-      }
+          // renderNow() uploads current video texture and runs WebGL shaders
+          renderNow();
 
-      onProgress(0.18 + (fi / totalFrames) * 0.8);
-    }
+          // gl.finish() blocks JS until GPU finishes — canvas is guaranteed ready
+          syncGPU();
+
+          const vf = new VideoFrame(canvas, { timestamp: tsUs });
+          videoEncoder.encode(vf, { keyFrame: framesEncoded % 60 === 0 });
+          vf.close();
+          framesEncoded++;
+
+          const progress = Math.min(metadata.mediaTime / duration, 1);
+          onProgress(0.18 + progress * 0.79);
+
+          if (metadata.mediaTime >= duration - 0.05) {
+            clearTimeout(safetyTimer);
+            done();
+          } else {
+            video.requestVideoFrameCallback(captureFrame);
+          }
+        } catch (e) {
+          clearTimeout(safetyTimer);
+          reject(e);
+        }
+      };
+
+      video.requestVideoFrameCallback(captureFrame);
+
+      video.onended = () => { clearTimeout(safetyTimer); done(); };
+    });
 
     if (cancelRef.cancelled) { videoEncoder.close(); return null; }
 
@@ -212,8 +230,9 @@ export async function exportMp4(opts: Mp4ExportOptions): Promise<Blob | null> {
     return new Blob([target.buffer], { type: "video/mp4" });
 
   } finally {
-    // Always restore preview regardless of success/cancel/error
+    video.onended = null;
     video.loop = true;
+    video.currentTime = 0;
     video.play().catch(() => {});
     resumeLoop();
   }
