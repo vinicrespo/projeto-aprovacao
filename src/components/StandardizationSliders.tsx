@@ -37,6 +37,12 @@ const SLIDERS: SliderDef[] = [
     description: "Dithering procedural para mascaramento de artefatos de compressão",
     min: 0, max: 1, step: 0.01,
   },
+  {
+    key: "u_crackle_intensity",
+    label: "Craquelado",
+    description: "Sobreposição de textura envelhecida com padrão de rachaduras",
+    min: 0, max: 1, step: 0.01,
+  },
 ];
 
 interface Props {

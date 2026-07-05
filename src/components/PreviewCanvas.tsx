@@ -29,6 +29,7 @@ interface UniformLocs {
   u_flip_v: WebGLUniformLocation | null;
   u_flip_h: WebGLUniformLocation | null;
   u_hash_seed: WebGLUniformLocation | null;
+  u_crackle_intensity: WebGLUniformLocation | null;
   u_texture: WebGLUniformLocation | null;
   u_prev_texture: WebGLUniformLocation | null;
 }
@@ -83,6 +84,7 @@ export const PreviewCanvas = forwardRef<PreviewCanvasHandle, Props>(function Pre
       u_flip_v:             gl.getUniformLocation(program, "u_flip_v"),
       u_flip_h:             gl.getUniformLocation(program, "u_flip_h"),
       u_hash_seed:          gl.getUniformLocation(program, "u_hash_seed"),
+      u_crackle_intensity:  gl.getUniformLocation(program, "u_crackle_intensity"),
       u_texture:            gl.getUniformLocation(program, "u_texture"),
       u_prev_texture:       gl.getUniformLocation(program, "u_prev_texture"),
     };
@@ -121,6 +123,7 @@ export const PreviewCanvas = forwardRef<PreviewCanvasHandle, Props>(function Pre
     gl.uniform1f(locs.u_flip_v,             u.u_flip_v);
     gl.uniform1f(locs.u_flip_h,             u.u_flip_h);
     gl.uniform1f(locs.u_hash_seed,          u.u_hash_seed);
+    gl.uniform1f(locs.u_crackle_intensity,  u.u_crackle_intensity);
 
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, texCurrentRef.current);

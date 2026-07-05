@@ -67,6 +67,7 @@ function buildRecommendedProfile(
     u_flip_v: 0,
     u_flip_h: 0,
     u_hash_seed: 0,
+    u_crackle_intensity: 0,
   };
 }
 
