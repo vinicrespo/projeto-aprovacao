@@ -39,8 +39,8 @@ const SLIDERS: SliderDef[] = [
   },
   {
     key: "u_crackle_intensity",
-    label: "Pixelado",
-    description: "Pixelização da imagem — blocos maiores com intensidade maior",
+    label: "Craquelado",
+    description: "Linhas finas de rachadura sobrepostas — imagem permanece legível",
     min: 0, max: 1, step: 0.01,
   },
 ];
