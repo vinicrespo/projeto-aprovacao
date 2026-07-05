@@ -12,7 +12,7 @@ uniform float u_noise_enabled;
 uniform float u_flip_v;
 uniform float u_flip_h;
 uniform float u_hash_seed;
-uniform float u_crackle_intensity; // crackle intensity: 0 = off, 1 = visible cracks
+uniform float u_crackle_intensity; // pixelation: 0 = off, 1 = max
 
 in vec2 v_texcoord;
 out vec4 fragColor;
@@ -63,23 +63,6 @@ vec3 temporalBlend(vec3 current, vec2 uv, float weight) {
   return mix(current, prev, clamp(weight, 0.0, 0.65));
 }
 
-// Worley noise — distance to nearest cell point (0 at boundary, ~1 at center)
-vec2 cellPt(vec2 cell) {
-  return fract(sin(vec2(dot(cell, vec2(127.1,311.7)), dot(cell, vec2(269.5,183.3)))) * 43758.5453);
-}
-float worley(vec2 uv, float scale) {
-  vec2 st = uv * scale;
-  vec2 ci = floor(st);
-  vec2 cf = fract(st);
-  float d = 8.0;
-  for (int y = -1; y <= 1; y++)
-    for (int x = -1; x <= 1; x++) {
-      vec2 nb = vec2(float(x), float(y));
-      d = min(d, length(nb + cellPt(ci + nb) - cf));
-    }
-  return d;
-}
-
 float grainDither(vec2 uv, float density, float time) {
   vec2 pos = uv * 1024.0;
   float grain = noise(pos + time * 17.3) * 2.0 - 1.0;
@@ -92,7 +75,13 @@ void main() {
   if (u_flip_v > 0.5) uv.y = 1.0 - uv.y;
   if (u_flip_h > 0.5) uv.x = 1.0 - uv.x;
 
-  // (pixelation removed — crackle overlay applied after color processing)
+  // Pixelation — snap UV to a coarse grid
+  // Starts at ~600 blocks (≈2px each) so 0.01 is barely visible;
+  // exponential scale keeps low end gentle, high end obviously pixelated
+  if (u_crackle_intensity > 0.001) {
+    float blocks = floor(exp(mix(log(600.0), log(6.0), u_crackle_intensity)));
+    uv = (floor(uv * blocks) + 0.5) / blocks;
+  }
 
   // 1. Chromatic correction
   vec3 color = chromaticAberration(u_texture, uv, u_chromatic_offset);
@@ -111,24 +100,11 @@ void main() {
   // 5. Temporal smoothing (video only — images have weight=0)
   color = temporalBlend(color, uv, u_motion_blur_weight);
 
-  // 6. Craquelado — thin dark lines at Voronoi cell boundaries
-  if (u_crackle_intensity > 0.001) {
-    // Multi-scale: large + medium cracks layered
-    float d1 = worley(uv, 5.0);   // large cracks
-    float d2 = worley(uv, 12.0);  // fine cracks
-    // Very narrow smoothstep → only pixels right on the boundary darken
-    float line1 = 1.0 - smoothstep(0.0, 0.06, d1);
-    float line2 = 1.0 - smoothstep(0.0, 0.04, d2);
-    float crack = clamp(line1 * 0.7 + line2 * 0.3, 0.0, 1.0);
-    // Subtle darkening only — image stays fully legible
-    color *= 1.0 - crack * u_crackle_intensity * 0.6;
-  }
-
-  // 7. Procedural grain dither
+  // 6. Procedural grain dither
   float grain = grainDither(uv, u_noise_density, u_time) * u_noise_enabled;
   color += grain;
 
-  // 8. Hash-bust noise
+  // 7. Hash-bust noise
   vec2 hashUV = uv + vec2(u_hash_seed * 7.3, u_hash_seed * 3.7);
   float hashNoise = (noise(hashUV * 2048.0 + u_hash_seed * 100.0) * 2.0 - 1.0) * (1.5 / 255.0);
   color += hashNoise;
