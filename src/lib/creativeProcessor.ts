@@ -6,6 +6,8 @@ export interface CreativeOptions {
   videoFile: File;
   onProgress: (ratio: number, phase: string) => void;
   cancelRef: { cancelled: boolean };
+  introSeconds?: number;  // override for testing; defaults to INTRO_SECONDS
+  outroSeconds?: number;  // override for testing; defaults to OUTRO_SECONDS
 }
 
 // ── Fixed pipeline constants (matches reference SaaS behaviour) ──────────────
@@ -131,6 +133,8 @@ async function processAudio(file: File): Promise<AudioBuffer | null> {
 
 export async function processCreative(opts: CreativeOptions): Promise<Blob | null> {
   const { coverFile, videoFile, onProgress, cancelRef } = opts;
+  const introSec = opts.introSeconds ?? INTRO_SECONDS;
+  const outroSec = opts.outroSeconds ?? OUTRO_SECONDS;
 
   // Require a secure context — WebCodecs is disabled on http://
   if (typeof window !== "undefined" && !window.isSecureContext) {
@@ -149,7 +153,7 @@ export async function processCreative(opts: CreativeOptions): Promise<Blob | nul
   const w = (video.videoWidth  || 720)  & ~1;
   const h = (video.videoHeight || 1280) & ~1;
   const videoDuration = video.duration;
-  const totalDuration = INTRO_SECONDS + videoDuration + OUTRO_SECONDS;
+  const totalDuration = introSec + videoDuration + outroSec;
 
   // ── Cover 2D canvas (source for intro + outro frames) ──────────────────────
   const coverCanvas = document.createElement("canvas");
@@ -272,7 +276,7 @@ export async function processCreative(opts: CreativeOptions): Promise<Blob | nul
 
   // ── Phase 1: intro cover ────────────────────────────────────────────────────
   onProgress(0.03, "Montando capa de abertura…");
-  const introFrames = Math.round(INTRO_SECONDS * COVER_FPS);
+  const introFrames = Math.round(introSec * COVER_FPS);
   for (let i = 0; i < introFrames; i++) {
     if (cancelRef.cancelled) { videoEncoder.close(); return null; }
     const ts = i / COVER_FPS;
@@ -302,7 +306,7 @@ export async function processCreative(opts: CreativeOptions): Promise<Blob | nul
         const mt = meta.mediaTime;
         if (mt * 1_000_000 > lastVideoTs) {
           renderVideoFrame(mt);
-          const ts = INTRO_SECONDS + mt;
+          const ts = introSec + mt;
           const vf = new VideoFrame(glCanvas, { timestamp: Math.round(ts * 1_000_000) });
           videoEncoder.encode(vf, { keyFrame: frameIndex % 60 === 0 });
           vf.close();
@@ -320,11 +324,11 @@ export async function processCreative(opts: CreativeOptions): Promise<Blob | nul
   });
   if (cancelRef.cancelled) { videoEncoder.close(); return null; }
 
-  const videoEndTs = INTRO_SECONDS + videoDuration;
+  const videoEndTs = introSec + videoDuration;
 
   // ── Phase 3: outro cover (5 min) ────────────────────────────────────────────
   onProgress(0.64, "Segurando capa por 5 minutos…");
-  const outroFrames = Math.round(OUTRO_SECONDS * COVER_FPS);
+  const outroFrames = Math.round(outroSec * COVER_FPS);
   for (let i = 0; i < outroFrames; i++) {
     if (cancelRef.cancelled) { videoEncoder.close(); return null; }
     const ts = videoEndTs + i / COVER_FPS;
@@ -352,7 +356,7 @@ export async function processCreative(opts: CreativeOptions): Promise<Blob | nul
     const sr = audioSampleRate;
     const CHUNK = 1024;
     const totalSamples = Math.ceil(totalDuration * sr);
-    const introSamples = Math.round(INTRO_SECONDS * sr);
+    const introSamples = Math.round(introSec * sr);
     const videoSamples = audioBuf.length;
     const aCh0 = audioBuf.getChannelData(0);
     const aCh1 = audioBuf.numberOfChannels > 1 ? audioBuf.getChannelData(1) : aCh0;
