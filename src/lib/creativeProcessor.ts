@@ -25,13 +25,42 @@ const PRESET = {
 
 const FRAG_GLSL_PATH = "/standardization_frag.glsl";
 
-function webCodecsAvailable(): boolean {
+// Video encoding is required; audio encoding is optional (falls back to silent)
+function videoCodecsAvailable(): boolean {
   return (
     typeof VideoEncoder !== "undefined" &&
-    typeof AudioEncoder !== "undefined" &&
     typeof VideoFrame !== "undefined" &&
-    typeof AudioData !== "undefined"
+    typeof EncodedVideoChunk !== "undefined"
   );
+}
+function audioCodecsAvailable(): boolean {
+  return typeof AudioEncoder !== "undefined" && typeof AudioData !== "undefined";
+}
+
+// Probe H.264 codec strings and return the first the browser can encode.
+const H264_CANDIDATES = [
+  "avc1.640028", // High   L4.0
+  "avc1.4d0028", // Main   L4.0
+  "avc1.42e028", // Baseline L4.0
+  "avc1.640020", // High   L3.2
+  "avc1.4d001f", // Main   L3.1
+  "avc1.42001f", // Baseline L3.1
+];
+
+async function pickVideoCodec(
+  width: number, height: number, framerate: number, bitrate: number
+): Promise<string | null> {
+  for (const codec of H264_CANDIDATES) {
+    try {
+      for (const hw of ["no-preference", "prefer-software", "prefer-hardware"] as const) {
+        const res = await VideoEncoder.isConfigSupported({
+          codec, width, height, bitrate, framerate, hardwareAcceleration: hw,
+        });
+        if (res.supported) return codec;
+      }
+    } catch { /* try next */ }
+  }
+  return null;
 }
 
 function loadImage(file: File): Promise<HTMLImageElement> {
@@ -102,7 +131,14 @@ async function processAudio(file: File): Promise<AudioBuffer | null> {
 
 export async function processCreative(opts: CreativeOptions): Promise<Blob | null> {
   const { coverFile, videoFile, onProgress, cancelRef } = opts;
-  if (!webCodecsAvailable()) return null;
+
+  // Require a secure context — WebCodecs is disabled on http://
+  if (typeof window !== "undefined" && !window.isSecureContext) {
+    throw new Error("Acesse o site por HTTPS para processar (WebCodecs exige conexão segura).");
+  }
+  if (!videoCodecsAvailable()) {
+    throw new Error("Seu navegador não suporta WebCodecs de vídeo. Use o Chrome ou Edge atualizado no desktop.");
+  }
 
   const { Muxer, ArrayBufferTarget } = await import("mp4-muxer");
 
@@ -125,7 +161,9 @@ export async function processCreative(opts: CreativeOptions): Promise<Blob | nul
   const glCanvas = document.createElement("canvas");
   glCanvas.width = w; glCanvas.height = h;
   const gl = glCanvas.getContext("webgl2");
-  if (!gl) return null;
+  if (!gl) {
+    throw new Error("Não foi possível iniciar o WebGL2 (aceleração gráfica pode estar desativada no Chrome).");
+  }
 
   const fragSrc = await fetch(FRAG_GLSL_PATH).then((r) => r.text());
   const program = createProgram(gl, fragSrc);
@@ -177,8 +215,19 @@ export async function processCreative(opts: CreativeOptions): Promise<Blob | nul
   };
 
   // ── Muxer + encoders ───────────────────────────────────────────────────────
+  const VIDEO_BITRATE = 3_500_000;
+
+  // Detect a supported H.264 codec string for these dimensions
+  const codec = await pickVideoCodec(w, h, VIDEO_FPS, VIDEO_BITRATE);
+  if (!codec) {
+    throw new Error("Nenhum codec H.264 compatível encontrado neste navegador. Use o Chrome atualizado no desktop.");
+  }
+
   const target = new ArrayBufferTarget();
-  const audioBuf = await processAudio(videoFile);
+
+  // Audio is optional — only if both the WebCodecs audio API and a decodable
+  // audio track exist. Otherwise the creative is exported silent (no failure).
+  const audioBuf = audioCodecsAvailable() ? await processAudio(videoFile) : null;
   const hasAudio = !!audioBuf;
   const audioSampleRate = audioBuf?.sampleRate ?? 44100;
 
@@ -195,9 +244,9 @@ export async function processCreative(opts: CreativeOptions): Promise<Blob | nul
     error: (e) => console.error("VideoEncoder:", e),
   });
   videoEncoder.configure({
-    codec: "avc1.4d0028",              // H.264 Main Level 4.0 (supports 720x1280)
+    codec,
     width: w, height: h,
-    bitrate: 3_500_000,
+    bitrate: VIDEO_BITRATE,
     framerate: VIDEO_FPS,
     hardwareAcceleration: "no-preference",
     avc: { format: "avc" },

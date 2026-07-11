@@ -55,12 +55,14 @@ function App() {
         downloadBlob(blob, camouflagedFilename());
       } else {
         setProgress(null);
-        if (!blob) alert("Use o Chrome no desktop para processar (WebCodecs necessário).");
       }
     } catch (e) {
       console.error("Process failed:", e);
       setProgress(null);
-      alert("Falha ao processar o criativo. Verifique os arquivos e tente novamente.");
+      const msg = e instanceof Error && e.message
+        ? e.message
+        : "Falha ao processar o criativo. Verifique os arquivos e tente novamente.";
+      alert(msg);
     }
   }, [coverFile, videoFile, progress]);
 
