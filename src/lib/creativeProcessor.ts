@@ -14,7 +14,7 @@ export interface CreativeOptions {
 const INTRO_SECONDS = 2;      // cover shown briefly at the start
 const OUTRO_SECONDS = 300;    // cover held for 5 minutes at the end
 const VIDEO_FPS     = 30;
-const COVER_FPS     = 10;     // static cover — lower fps keeps encode fast & small
+const COVER_FPS     = 30;     // match video fps → whole file is constant-rate (CFR)
 
 // Baked-in effect preset applied to the video portion
 const PRESET = {
@@ -283,48 +283,54 @@ export async function processCreative(opts: CreativeOptions): Promise<Blob | nul
     await encodeCanvasFrame(coverCanvas, ts, i % COVER_FPS === 0);
   }
 
-  // ── Phase 2: video with effects ─────────────────────────────────────────────
+  // ── Phase 2: video with effects (deterministic seek-based CFR capture) ──────
+  // Real-time RVFC capture drops frames under load and produces variable-rate
+  // (VFR) output that stutters in players like QuickTime. Instead we seek to
+  // every 1/fps position, render it, and stamp it at an evenly-spaced timestamp.
+  // Result: exact constant 30fps, no dropped frames, perfect audio sync.
   onProgress(0.08, "Processando vídeo…");
+  video.pause();
+
+  const seekTo = (t: number) =>
+    new Promise<void>((res) => {
+      if (Math.abs(video.currentTime - t) < 1e-4 && video.readyState >= 2) { res(); return; }
+      const onSeeked = () => { video.removeEventListener("seeked", onSeeked); res(); };
+      video.addEventListener("seeked", onSeeked);
+      video.currentTime = t;
+    });
+
+  // Prime: decode the first frame so texImage2D has valid pixels
   await new Promise<void>((res) => {
-    if (video.currentTime === 0) return res();
-    const hh = () => { video.removeEventListener("seeked", hh); res(); };
-    video.addEventListener("seeked", hh);
-    video.currentTime = 0;
+    const onSeeked = () => { video.removeEventListener("seeked", onSeeked); res(); };
+    video.addEventListener("seeked", onSeeked);
+    video.currentTime = 0.001;
   });
-  video.play().catch(() => {});
 
-  let lastVideoTs = 0;
-  await new Promise<void>((resolve, reject) => {
-    let finished = false;
-    const done = () => { if (!finished) { finished = true; video.pause(); resolve(); } };
-    const safety = setTimeout(done, (videoDuration + 20) * 1000);
-    video.onended = () => { clearTimeout(safety); done(); };
+  const totalVideoFrames = Math.max(1, Math.round(videoDuration * VIDEO_FPS));
+  for (let f = 0; f < totalVideoFrames; f++) {
+    if (cancelRef.cancelled) { videoEncoder.close(); return null; }
 
-    const cb = (_n: DOMHighResTimeStamp, meta: { mediaTime: number }) => {
-      if (cancelRef.cancelled || finished) { clearTimeout(safety); done(); return; }
-      try {
-        const mt = meta.mediaTime;
-        if (mt * 1_000_000 > lastVideoTs) {
-          renderVideoFrame(mt);
-          const ts = introSec + mt;
-          const vf = new VideoFrame(glCanvas, { timestamp: Math.round(ts * 1_000_000) });
-          videoEncoder.encode(vf, { keyFrame: frameIndex % 60 === 0 });
-          vf.close();
-          frameIndex++;
-          lastVideoTs = Math.round(mt * 1_000_000);
-          onProgress(0.08 + Math.min(mt / videoDuration, 1) * 0.55, "Processando vídeo…");
-          if (videoEncoder.encodeQueueSize > 8) {
-            // best-effort throttle without blocking the RVFC callback flow
-          }
-        }
-        video.requestVideoFrameCallback(cb);
-      } catch (e) { clearTimeout(safety); reject(e); }
-    };
-    video.requestVideoFrameCallback(cb);
-  });
+    const srcT = Math.min(f / VIDEO_FPS, Math.max(0, videoDuration - 1e-3));
+    await seekTo(srcT);
+
+    renderVideoFrame(srcT);
+    const ts = introSec + f / VIDEO_FPS;   // evenly spaced → constant frame rate
+    const vf = new VideoFrame(glCanvas, { timestamp: Math.round(ts * 1_000_000) });
+    videoEncoder.encode(vf, { keyFrame: f % 60 === 0 });
+    vf.close();
+    frameIndex++;
+
+    if (videoEncoder.encodeQueueSize > 8) {
+      await new Promise<void>((r) => {
+        const check = () => (videoEncoder.encodeQueueSize <= 4 ? r() : setTimeout(check, 8));
+        check();
+      });
+    }
+    if (f % 5 === 0) onProgress(0.08 + (f / totalVideoFrames) * 0.55, "Processando vídeo…");
+  }
   if (cancelRef.cancelled) { videoEncoder.close(); return null; }
 
-  const videoEndTs = introSec + videoDuration;
+  const videoEndTs = introSec + totalVideoFrames / VIDEO_FPS;
 
   // ── Phase 3: outro cover (5 min) ────────────────────────────────────────────
   onProgress(0.64, "Segurando capa por 5 minutos…");
