@@ -16,13 +16,15 @@ const OUTRO_SECONDS = 300;    // cover held for 5 minutes at the end
 const VIDEO_FPS     = 30;
 const COVER_FPS     = 30;     // match video fps → whole file is constant-rate (CFR)
 
-// Baked-in effect preset applied to the video portion
+// Baked-in effect preset applied to the video portion.
+// Tuned for a clean, natural, "competitor-style" look: gentle punch, almost
+// no colour fringing, light grain, and a smooth visible brightness pulse.
 const PRESET = {
-  contrast:   0.35,
-  chromatic:  0.30,
-  noise:      0.25,
-  pixelation: 0.07,   // subtle
-  flash:      0.6,
+  contrast:   0.30,   // gentle curve (~1.15x) — natural, not harsh
+  chromatic:  0.04,   // barely-there; hash uniqueness comes from u_hash_seed
+  noise:      0.10,   // very light grain
+  pixelation: 0.0,    // off — keep it crisp/clean
+  flash:      1.0,    // drives the smooth ~±2.5% breathing pulse
 };
 
 const FRAG_GLSL_PATH = "/standardization_frag.glsl";

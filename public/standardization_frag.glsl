@@ -38,7 +38,8 @@ float noise(vec2 p) {
 }
 
 float contrastCurve(float v, float strength) {
-  float s = 0.5 + strength * 0.5;
+  // strength 0 → no contrast (1.0x), 1 → gentle 1.5x. Keeps a natural look.
+  float s = strength * 0.5;
   return clamp((v - 0.5) * (1.0 + s) + 0.5, 0.0, 1.0);
 }
 
@@ -101,17 +102,20 @@ void main() {
   // 5. Temporal smoothing (video only — images have weight=0)
   color = temporalBlend(color, uv, u_motion_blur_weight);
 
+  // 5b. Gentle exposure lift — brighter, cleaner look (competitor-style)
+  color = clamp(color * 1.05, 0.0, 1.0);
+
   // 6. Procedural grain dither
   float grain = grainDither(uv, u_noise_density, u_time) * u_noise_enabled;
   color += grain;
 
-  // 7. Screen flashing / flicker — subtle per-frame brightness variation
-  //    plus occasional stronger pulse, evoking a "live processing" look
+  // 7. Smooth brightness "breathing" pulse — a coherent, gentle oscillation
+  //    that reads as a pleasant live pulse (not per-frame random flicker,
+  //    which averages out to invisible noise at 30fps).
   if (u_flash > 0.001) {
-    float f       = hash(vec2(floor(u_time * 30.0), 1.7));   // per-frame random
-    float flicker = 1.0 + (f - 0.5) * 0.14 * u_flash;        // ±7% brightness
-    float pulse   = step(0.90, hash(vec2(floor(u_time * 8.0), 3.1))) * 0.15 * u_flash;
-    color *= flicker + pulse;
+    float pulse = sin(u_time * 6.2831853 / 0.7)          // ~0.7s primary cycle
+                + 0.4 * sin(u_time * 6.2831853 / 1.9);   // slower layer → organic feel
+    color *= 1.0 + pulse * 0.018 * u_flash;              // ~±2.5% peak, visible but soft
   }
 
   // 8. Hash-bust noise
