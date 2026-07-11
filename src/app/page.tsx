@@ -1,32 +1,10 @@
 "use client";
 import { useCallback, useRef, useState } from "react";
-import type { ShaderUniforms, AnalysisResult, DiagnosticInfo, ProcessingState } from "@/types";
-import { AssetUploader } from "@/components/AssetUploader";
-import { PreviewCanvas, type PreviewCanvasHandle } from "@/components/PreviewCanvas";
-import { ImageCanvas, type ImageCanvasHandle } from "@/components/ImageCanvas";
-import { StandardizationSliders } from "@/components/StandardizationSliders";
-import { QADiagnosticOverlay } from "@/components/QADiagnosticOverlay";
 import { LoginScreen } from "@/components/LoginScreen";
-import { useLocalStoragePresets } from "@/hooks/useLocalStoragePresets";
-import { analyzeVideo } from "@/lib/analyzer";
-import { AudioProcessor } from "@/lib/audioProcessor";
-import { downloadBlob } from "@/lib/exporter";
-import { newHashSeed, randomizedFilename } from "@/lib/hashBuster";
 import { ExportModal } from "@/components/ExportModal";
-import { exportMp4 } from "@/lib/mp4Exporter";
-
-const DEFAULT_UNIFORMS: ShaderUniforms = {
-  u_time: 0,
-  u_contrast_curve: 0.3,
-  u_chromatic_offset: 0.25,
-  u_motion_blur_weight: 0.2,
-  u_noise_density: 0.2,
-  u_noise_enabled: 1,
-  u_flip_v: 0,
-  u_flip_h: 0,
-  u_hash_seed: 0,
-  u_crackle_intensity: 0,
-};
+import { downloadBlob } from "@/lib/exporter";
+import { randomizedFilename } from "@/lib/hashBuster";
+import { processCreative } from "@/lib/creativeProcessor";
 
 export default function DashboardPage() {
   const [authed, setAuthed] = useState(() => {
@@ -36,187 +14,62 @@ export default function DashboardPage() {
   return <App />;
 }
 
-type Tab = "video" | "image";
-
 function App() {
-  const [tab, setTab] = useState<Tab>("video");
-
-  // Shared uniforms across both tabs
-  const [uniforms, setUniforms] = useState<ShaderUniforms>(DEFAULT_UNIFORMS);
-  const { presets, addPreset, deletePreset } = useLocalStoragePresets();
-
-  // Video state
+  const [coverFile, setCoverFile] = useState<File | null>(null);
   const [videoFile, setVideoFile] = useState<File | null>(null);
-  const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
-  const [processingState, setProcessingState] = useState<ProcessingState>({
-    status: "idle", progress: 0, message: "",
-  });
-  const [diagnostic, setDiagnostic] = useState<DiagnosticInfo>({
-    fps: 0, gpuMemoryMB: 0, shaderErrors: [], frameTimeMs: 0,
-  });
-  const [qaVisible, setQaVisible] = useState(false);
-  const [exportProgress, setExportProgress] = useState<number | null>(null);
-  const [isPlaying, setIsPlaying] = useState(true);
-  const [audioMuted, setAudioMuted] = useState(false);
-  const [phaseInverted, setPhaseInverted] = useState(false);
-  const [compressorThreshold, setCompressorThreshold] = useState(-18);
+  const [coverUrl, setCoverUrl] = useState<string | null>(null);
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
 
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const previewRef = useRef<PreviewCanvasHandle>(null);
-  const videoElRef = useRef<HTMLVideoElement | null>(null);
-  const audioProcessorRef = useRef<AudioProcessor | null>(null);
-  const cancelExportRef = useRef<{ cancelled: boolean }>({ cancelled: false });
+  const [progress, setProgress] = useState<number | null>(null);
+  const [phase, setPhase] = useState("");
+  const cancelRef = useRef<{ cancelled: boolean }>({ cancelled: false });
 
-  // Image state
-  const [imageFile, setImageFile] = useState<File | null>(null);
-  const [imageExporting, setImageExporting] = useState(false);
-  const imageCanvasRef = useRef<ImageCanvasHandle>(null);
+  const pickCover = useCallback((file: File) => {
+    if (!file.type.startsWith("image/")) { alert("A capa deve ser uma imagem (JPG, PNG…)."); return; }
+    setCoverFile(file);
+    setCoverUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return URL.createObjectURL(file); });
+  }, []);
 
-  // ── Video handlers ───────────────────────────────────────────────────────
-
-  const handleFileSelect = useCallback(async (file: File) => {
+  const pickVideo = useCallback((file: File) => {
+    if (!file.type.startsWith("video/")) { alert("Envie um vídeo (MP4, MOV…)."); return; }
     setVideoFile(file);
-    setAnalysis(null);
-    setIsPlaying(true);
-    setProcessingState({ status: "analyzing", progress: 0, message: "Analisando vídeo…" });
+    setVideoUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return URL.createObjectURL(file); });
+  }, []);
 
-    const tempVideo = document.createElement("video");
-    tempVideo.src = URL.createObjectURL(file);
-    tempVideo.muted = true;
-    await new Promise<void>((res) => { tempVideo.onloadedmetadata = () => res(); });
+  const canProcess = coverFile && videoFile && progress === null;
 
+  const handleProcess = useCallback(async () => {
+    if (!coverFile || !videoFile || progress !== null) return;
+    cancelRef.current = { cancelled: false };
+    setProgress(0);
+    setPhase("Iniciando…");
     try {
-      const result = await analyzeVideo(tempVideo, (p) =>
-        setProcessingState({ status: "analyzing", progress: p, message: `Analisando frames… ${Math.round(p * 100)}%` })
-      );
-      setAnalysis(result);
-      setProcessingState({ status: "idle", progress: 1, message: "Análise concluída" });
-    } catch {
-      setProcessingState({ status: "error", progress: 0, message: "Falha na análise" });
-    } finally {
-      URL.revokeObjectURL(tempVideo.src);
-    }
-  }, []);
-
-  const handleVideoReady = useCallback((video: HTMLVideoElement) => {
-    videoElRef.current = video;
-    if (!audioProcessorRef.current) {
-      audioProcessorRef.current = new AudioProcessor({ invertPhase: false, monitorVolume: 1 });
-    }
-    audioProcessorRef.current.connect(video);
-    video.onplay  = () => setIsPlaying(true);
-    video.onpause = () => setIsPlaying(false);
-  }, []);
-
-  const togglePlayPause = useCallback(() => {
-    const v = videoElRef.current;
-    if (!v) return;
-    if (v.paused) v.play(); else v.pause();
-  }, []);
-
-  const toggleAudioMute = useCallback(() => {
-    setAudioMuted((prev) => { const n = !prev; audioProcessorRef.current?.setMuted(n); return n; });
-  }, []);
-
-  const togglePhaseInvert = useCallback(() => {
-    setPhaseInverted((prev) => { const n = !prev; audioProcessorRef.current?.setPhaseInvert(n); return n; });
-  }, []);
-
-  const handleCompressorThreshold = useCallback((db: number) => {
-    setCompressorThreshold(db);
-    audioProcessorRef.current?.setCompressorThreshold(db);
-  }, []);
-
-  const toggleNoise   = useCallback(() => setUniforms((u) => ({ ...u, u_noise_enabled: u.u_noise_enabled > 0.5 ? 0 : 1 })), []);
-  const toggleFlipV   = useCallback(() => setUniforms((u) => ({ ...u, u_flip_v: u.u_flip_v > 0.5 ? 0 : 1 })), []);
-  const toggleFlipH   = useCallback(() => setUniforms((u) => ({ ...u, u_flip_h: u.u_flip_h > 0.5 ? 0 : 1 })), []);
-
-  const handleExport = useCallback(async () => {
-    if (exportProgress !== null) return;
-    const canvas = canvasRef.current;
-    const video = videoElRef.current;
-    const preview = previewRef.current;
-    if (!canvas || !video || !videoFile || !preview) return;
-
-    audioProcessorRef.current?.setMuted(true);
-    const seed = newHashSeed();
-    setUniforms((u) => ({ ...u, u_hash_seed: seed }));
-    cancelExportRef.current = { cancelled: false };
-    setExportProgress(0);
-
-    const cleanup = () => {
-      setExportProgress(null);
-      setUniforms((u) => ({ ...u, u_hash_seed: 0 }));
-      audioProcessorRef.current?.setMuted(audioMuted);
-    };
-
-    try {
-      const blob = await exportMp4({
-        canvas, video, videoFile,
-        compressorThreshold, invertPhase: phaseInverted,
-        renderNow: preview.renderNow,
-        syncGPU: preview.syncGPU,
-        pauseLoop: preview.pauseLoop,
-        resumeLoop: preview.resumeLoop,
-        onProgress: setExportProgress,
-        cancelRef: cancelExportRef.current,
+      const blob = await processCreative({
+        coverFile,
+        videoFile,
+        onProgress: (r, p) => { setProgress(r); setPhase(p); },
+        cancelRef: cancelRef.current,
       });
-
-      if (blob && !cancelExportRef.current.cancelled) {
-        cleanup();
+      if (blob && !cancelRef.current.cancelled) {
+        setProgress(null);
         downloadBlob(blob, randomizedFilename(videoFile.name));
       } else {
-        cleanup();
-        if (!blob) alert("Use o Chrome para exportar MP4 (WebCodecs necessário).");
+        setProgress(null);
+        if (!blob) alert("Use o Chrome no desktop para processar (WebCodecs necessário).");
       }
     } catch (e) {
-      console.error("Export failed:", e);
-      cleanup();
+      console.error("Process failed:", e);
+      setProgress(null);
+      alert("Falha ao processar o criativo. Verifique os arquivos e tente novamente.");
     }
-  }, [videoFile, audioMuted, compressorThreshold, phaseInverted, exportProgress]);
+  }, [coverFile, videoFile, progress]);
 
-  const cancelExport = useCallback(() => {
-    cancelExportRef.current.cancelled = true;
-    setExportProgress(null);
-    setUniforms((u) => ({ ...u, u_hash_seed: 0 }));
-    audioProcessorRef.current?.setMuted(audioMuted);
-  }, [audioMuted]);
-
-  // ── Image handlers ────────────────────────────────────────────────────────
-
-  const handleImageSelect = useCallback((file: File) => {
-    setImageFile(file);
-  }, []);
-
-  const handleImageExport = useCallback(async () => {
-    const handle = imageCanvasRef.current;
-    if (!handle || !imageFile || imageExporting) return;
-    setImageExporting(true);
-    try {
-      // Set hash seed for uniqueness
-      const seed = newHashSeed();
-      setUniforms((u) => ({ ...u, u_hash_seed: seed }));
-      // Small delay so React re-renders with new seed before we capture
-      await new Promise((r) => setTimeout(r, 50));
-      const blob = await handle.exportPng();
-      setUniforms((u) => ({ ...u, u_hash_seed: 0 }));
-      if (blob) {
-        const base = imageFile.name.replace(/\.[^.]+$/, "");
-        const rand = Array.from(crypto.getRandomValues(new Uint8Array(4)))
-          .map((b) => b.toString(16).padStart(2, "0")).join("");
-        downloadBlob(blob, `${base}_${rand}.png`);
-      }
-    } finally {
-      setImageExporting(false);
-    }
-  }, [imageFile, imageExporting]);
-
-  // ── Render ────────────────────────────────────────────────────────────────
+  const cancel = useCallback(() => { cancelRef.current.cancelled = true; setProgress(null); }, []);
 
   return (
     <div className="min-h-screen flex flex-col">
-      {exportProgress !== null && (
-        <ExportModal progress={exportProgress} done={false} onCancel={cancelExport} />
+      {progress !== null && (
+        <ExportModal progress={progress} done={false} onCancel={cancel} phaseLabel={phase} />
       )}
 
       {/* Header */}
@@ -236,231 +89,110 @@ function App() {
         </div>
       </header>
 
-      {/* Tabs */}
-      <div className="border-b border-white/5 px-6">
-        <div className="flex gap-1 -mb-px">
-          {(["video", "image"] as Tab[]).map((t) => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              className={`px-5 py-3 text-sm font-medium border-b-2 transition-colors ${
-                tab === t
-                  ? "border-brand-500 text-white"
-                  : "border-transparent text-white/40 hover:text-white/70"
-              }`}
-            >
-              {t === "video" ? "🎬 Vídeo" : "🖼 Imagem"}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="flex-1 flex overflow-hidden">
-        {/* Sidebar — shared */}
-        <aside className="w-80 border-r border-white/5 p-5 overflow-y-auto flex flex-col gap-6">
-          {tab === "video" && analysis && (
-            <div className="rounded-xl bg-white/3 border border-white/8 p-4">
-              <h3 className="text-xs font-semibold text-white/50 uppercase tracking-wide mb-3">Análise Heurística</h3>
-              <div className="space-y-2">
-                <Metric label="Intensidade de Movimento" value={analysis.motionIntensity} />
-                <Metric label="Score de Artefatos" value={analysis.artifactScore} />
-                <div className="text-[11px] text-white/30">Histograma calculado · {analysis.luminanceHistogram.length} bins</div>
-              </div>
-            </div>
-          )}
-
-          {tab === "video" && processingState.status !== "idle" && (
-            <div className="rounded-xl bg-white/3 border border-white/8 p-4">
-              <div className="flex items-center gap-2 mb-2">
-                {processingState.status === "analyzing" && <div className="w-2 h-2 rounded-full bg-brand-500 animate-pulse" />}
-                <span className="text-xs text-white/60">{processingState.message}</span>
-              </div>
-              {processingState.status === "analyzing" && (
-                <div className="h-1 bg-white/10 rounded-full overflow-hidden">
-                  <div className="h-full bg-brand-500 transition-all duration-300" style={{ width: `${processingState.progress * 100}%` }} />
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Visual sliders — shared */}
-          <div className="rounded-xl bg-white/3 border border-white/8 p-4">
-            <StandardizationSliders
-              uniforms={uniforms}
-              onChange={setUniforms}
-              analysis={analysis}
-              onSavePreset={(name) => addPreset(name, uniforms)}
-            />
+      <main className="flex-1 flex items-start justify-center p-6 overflow-y-auto">
+        <div className="w-full max-w-2xl flex flex-col gap-6 mt-4">
+          <div className="text-center">
+            <h2 className="text-lg font-semibold text-white">Processar Criativo</h2>
+            <p className="text-sm text-white/40 mt-1">
+              Suba a capa (CTA) e o vídeo. A capa entra na abertura e fica 5 minutos no final.
+            </p>
           </div>
 
-          {/* Audio controls — video only */}
-          {tab === "video" && videoFile && (
-            <div className="rounded-xl bg-white/3 border border-white/8 p-4">
-              <h3 className="text-xs font-semibold text-white/50 uppercase tracking-wide mb-4">Controles de Áudio</h3>
-              <div className="space-y-4">
-                <div>
-                  <div className="flex justify-between mb-1.5">
-                    <div>
-                      <span className="text-sm text-white/80">Intensidade do Ruído</span>
-                      <p className="text-[11px] text-white/35 mt-0.5">Threshold do compressor dinâmico</p>
-                    </div>
-                    <span className="text-sm font-mono text-brand-500 self-start">{compressorThreshold} dB</span>
-                  </div>
-                  <div className="relative h-1.5 bg-white/10 rounded-full">
-                    <div className="absolute left-0 top-0 h-full bg-brand-500 rounded-full" style={{ width: `${((compressorThreshold + 60) / 60) * 100}%` }} />
-                    <input type="range" min={-60} max={0} step={1} value={compressorThreshold}
-                      onChange={(e) => handleCompressorThreshold(parseInt(e.target.value))}
-                      className="absolute inset-0 w-full opacity-0 cursor-pointer h-full" />
-                  </div>
-                  <div className="flex justify-between text-[10px] text-white/20 mt-1"><span>Máximo</span><span>Nenhum</span></div>
-                </div>
+          {/* Step 1 — Cover */}
+          <StepCard step={1} title="Capa (CTA)" done={!!coverFile}>
+            <UploadSlot
+              accept="image/*"
+              onFile={pickCover}
+              label={coverFile ? coverFile.name : "Clique ou arraste a imagem de capa"}
+              preview={coverUrl ? <img src={coverUrl} alt="capa" className="h-full w-full object-cover" /> : null}
+              tall
+            />
+          </StepCard>
 
-                <div className="flex items-center justify-between">
-                  <div>
-                    <span className="text-sm text-white/80">Inverter Fase</span>
-                    <p className="text-[11px] text-white/35 mt-0.5">Compatibilidade mono</p>
-                  </div>
-                  <button onClick={togglePhaseInvert} className={`relative w-10 h-5 rounded-full transition-colors ${phaseInverted ? "bg-amber-500" : "bg-white/10"}`}>
-                    <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${phaseInverted ? "left-5" : "left-0.5"}`} />
-                  </button>
-                </div>
+          {/* Step 2 — Video */}
+          <StepCard step={2} title="Vídeo" done={!!videoFile}>
+            <UploadSlot
+              accept="video/*"
+              onFile={pickVideo}
+              label={videoFile ? videoFile.name : "Clique ou arraste o vídeo"}
+              preview={videoUrl ? <video src={videoUrl} muted loop autoPlay playsInline className="h-full w-full object-cover" /> : null}
+              tall
+            />
+          </StepCard>
 
-                <div className="flex items-center justify-between">
-                  <div>
-                    <span className="text-sm text-white/80">Monitor de Áudio</span>
-                    <p className="text-[11px] text-white/35 mt-0.5">Ouvir no preview</p>
-                  </div>
-                  <button onClick={toggleAudioMute} className={`relative w-10 h-5 rounded-full transition-colors ${!audioMuted ? "bg-brand-500" : "bg-white/10"}`}>
-                    <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${!audioMuted ? "left-5" : "left-0.5"}`} />
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
+          {/* Step 3 — Process */}
+          <button
+            onClick={handleProcess}
+            disabled={!canProcess}
+            className="w-full py-4 rounded-xl bg-brand-500 text-white font-semibold text-base
+                       hover:bg-brand-600 disabled:opacity-30 disabled:cursor-not-allowed
+                       transition-colors flex items-center justify-center gap-2"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M13 10V3L4 14h7v7l9-11h-7z" />
+            </svg>
+            Processar
+          </button>
 
-          {presets.length > 0 && (
-            <div className="rounded-xl bg-white/3 border border-white/8 p-4">
-              <h3 className="text-xs font-semibold text-white/50 uppercase tracking-wide mb-3">Presets Salvos</h3>
-              <div className="space-y-1.5">
-                {presets.map((p) => (
-                  <div key={p.id} className="flex items-center justify-between group">
-                    <button onClick={() => setUniforms(p.uniforms)} className="text-xs text-white/60 hover:text-white transition-colors">{p.name}</button>
-                    <button onClick={() => deletePreset(p.id)} className="text-[10px] text-white/20 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all">✕</button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </aside>
-
-        {/* Main */}
-        <main className="flex-1 p-6 flex flex-col gap-4 overflow-y-auto">
-          {tab === "video" ? (
-            !videoFile ? (
-              <AssetUploader onFile={handleFileSelect} accept="video/*" label="Arraste um vídeo ou clique para selecionar" />
-            ) : (
-              <>
-                <PreviewCanvas
-                  ref={previewRef}
-                  videoFile={videoFile}
-                  uniforms={uniforms}
-                  onDiagnostic={setDiagnostic}
-                  onVideoReady={handleVideoReady}
-                  canvasRef={canvasRef}
-                />
-                <div className="flex flex-wrap items-center gap-2">
-                  <button onClick={() => { setVideoFile(null); setAnalysis(null); }}
-                    className="text-sm px-3 py-2 rounded-lg bg-white/5 text-white/60 hover:bg-white/10 transition-colors">
-                    ← Trocar
-                  </button>
-                  <div className="w-px h-6 bg-white/10" />
-                  <button onClick={togglePlayPause}
-                    className="flex items-center gap-1.5 text-sm px-3 py-2 rounded-lg bg-white/5 text-white/70 hover:bg-white/10 transition-colors">
-                    {isPlaying ? (
-                      <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zM7 8a1 1 0 012 0v4a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v4a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" /></svg>
-                    ) : (
-                      <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clipRule="evenodd" /></svg>
-                    )}
-                    {isPlaying ? "Pausar" : "Retomar"}
-                  </button>
-                  <div className="w-px h-6 bg-white/10" />
-                  <ToggleChip active={uniforms.u_noise_enabled > 0.5} onClick={toggleNoise} icon="⬛" label="Ruído/Dither" />
-                  <ToggleChip active={uniforms.u_flip_v > 0.5} onClick={toggleFlipV} icon="↕" label="Flip V" activeColor="violet" />
-                  <ToggleChip active={uniforms.u_flip_h > 0.5} onClick={toggleFlipH} icon="↔" label="Flip H" activeColor="violet" />
-                  <div className="w-px h-6 bg-white/10" />
-                  <button onClick={handleExport} disabled={exportProgress !== null}
-                    className="text-sm px-5 py-2 rounded-lg bg-brand-500 text-white font-medium hover:bg-brand-600 disabled:opacity-50 transition-colors flex items-center gap-2">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                    </svg>
-                    Baixar Vídeo
-                  </button>
-                  <span className="text-xs text-white/30 font-mono ml-auto">{diagnostic.fps} fps</span>
-                </div>
-              </>
-            )
-          ) : (
-            // ── Image tab ─────────────────────────────────────────────────
-            !imageFile ? (
-              <AssetUploader onFile={handleImageSelect} accept="image/*" label="Arraste uma imagem ou clique para selecionar" />
-            ) : (
-              <>
-                <ImageCanvas ref={imageCanvasRef} imageFile={imageFile} uniforms={uniforms} />
-                <div className="flex flex-wrap items-center gap-2">
-                  <button onClick={() => setImageFile(null)}
-                    className="text-sm px-3 py-2 rounded-lg bg-white/5 text-white/60 hover:bg-white/10 transition-colors">
-                    ← Trocar
-                  </button>
-                  <div className="w-px h-6 bg-white/10" />
-                  <ToggleChip active={uniforms.u_noise_enabled > 0.5} onClick={toggleNoise} icon="⬛" label="Ruído/Dither" />
-                  <ToggleChip active={uniforms.u_flip_v > 0.5} onClick={toggleFlipV} icon="↕" label="Flip V" activeColor="violet" />
-                  <ToggleChip active={uniforms.u_flip_h > 0.5} onClick={toggleFlipH} icon="↔" label="Flip H" activeColor="violet" />
-                  <div className="w-px h-6 bg-white/10" />
-                  <button onClick={handleImageExport} disabled={imageExporting}
-                    className="text-sm px-5 py-2 rounded-lg bg-brand-500 text-white font-medium hover:bg-brand-600 disabled:opacity-50 transition-colors flex items-center gap-2">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                    </svg>
-                    {imageExporting ? "Baixando…" : "Baixar Imagem"}
-                  </button>
-                </div>
-              </>
-            )
-          )}
-        </main>
-      </div>
-
-      <QADiagnosticOverlay visible={qaVisible} onToggle={() => setQaVisible((v) => !v)} info={diagnostic} />
+          <p className="text-center text-[11px] text-white/25">
+            Abertura ~2s · vídeo com efeitos · capa segurada por 5 min no final · exporta MP4
+          </p>
+        </div>
+      </main>
     </div>
   );
 }
 
-function ToggleChip({ active, onClick, icon, label, activeColor = "brand" }: {
-  active: boolean; onClick: () => void; icon: string; label: string; activeColor?: "brand" | "amber" | "violet";
+function StepCard({ step, title, done, children }: {
+  step: number; title: string; done: boolean; children: React.ReactNode;
 }) {
-  const colors = {
-    brand:  active ? "bg-brand-500/20 border-brand-500/50 text-brand-400" : "bg-white/5 border-white/10 text-white/40",
-    amber:  active ? "bg-amber-500/20 border-amber-500/50 text-amber-400" : "bg-white/5 border-white/10 text-white/40",
-    violet: active ? "bg-violet-500/20 border-violet-500/50 text-violet-400" : "bg-white/5 border-white/10 text-white/40",
-  };
   return (
-    <button onClick={onClick} className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-all ${colors[activeColor]}`}>
-      <span>{icon}</span><span>{label}</span>
-    </button>
+    <div className="rounded-2xl bg-white/3 border border-white/8 p-5">
+      <div className="flex items-center gap-2 mb-3">
+        <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold
+          ${done ? "bg-emerald-500 text-white" : "bg-white/10 text-white/50"}`}>
+          {done ? "✓" : step}
+        </div>
+        <h3 className="text-sm font-medium text-white">{title}</h3>
+      </div>
+      {children}
+    </div>
   );
 }
 
-function Metric({ label, value }: { label: string; value: number }) {
-  const pct = Math.round(value * 100);
+function UploadSlot({ accept, onFile, label, preview, tall }: {
+  accept: string; onFile: (f: File) => void; label: string; preview: React.ReactNode; tall?: boolean;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [drag, setDrag] = useState(false);
   return (
-    <div>
-      <div className="flex justify-between text-[11px] mb-1">
-        <span className="text-white/50">{label}</span>
-        <span className="text-white/70 font-mono">{pct}%</span>
-      </div>
-      <div className="h-1 bg-white/10 rounded-full overflow-hidden">
-        <div className={`h-full rounded-full transition-all ${pct > 70 ? "bg-red-500" : pct > 40 ? "bg-yellow-500" : "bg-emerald-500"}`} style={{ width: `${pct}%` }} />
-      </div>
+    <div
+      onClick={() => inputRef.current?.click()}
+      onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
+      onDragLeave={() => setDrag(false)}
+      onDrop={(e) => { e.preventDefault(); setDrag(false); const f = e.dataTransfer.files[0]; if (f) onFile(f); }}
+      className={`relative rounded-xl border-2 border-dashed cursor-pointer overflow-hidden
+        transition-all ${tall ? "h-44" : "h-28"}
+        ${drag ? "border-brand-500 bg-brand-500/10" : "border-white/10 bg-white/3 hover:border-white/25"}`}
+    >
+      <input ref={inputRef} type="file" accept={accept} className="hidden"
+        onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); }} />
+      {preview ? (
+        <>
+          <div className="absolute inset-0">{preview}</div>
+          <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent" />
+          <div className="absolute bottom-2 left-3 right-3 text-xs text-white/80 truncate">{label}</div>
+        </>
+      ) : (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-white/40">
+          <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+              d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+          </svg>
+          <span className="text-xs">{label}</span>
+        </div>
+      )}
     </div>
   );
 }

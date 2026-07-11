@@ -1,0 +1,353 @@
+import { createProgram, setupFullscreenQuad, createTexture, uploadVideoTexture } from "@/lib/shaderLoader";
+
+export interface CreativeOptions {
+  coverFile: File;
+  videoFile: File;
+  onProgress: (ratio: number, phase: string) => void;
+  cancelRef: { cancelled: boolean };
+}
+
+// ── Fixed pipeline constants (matches reference SaaS behaviour) ──────────────
+const INTRO_SECONDS = 2;      // cover shown briefly at the start
+const OUTRO_SECONDS = 300;    // cover held for 5 minutes at the end
+const VIDEO_FPS     = 30;
+const COVER_FPS     = 10;     // static cover — lower fps keeps encode fast & small
+
+// Baked-in effect preset applied to the video portion
+const PRESET = {
+  contrast:   0.35,
+  chromatic:  0.30,
+  noise:      0.25,
+  pixelation: 0.07,   // subtle
+  flash:      0.6,
+};
+
+const FRAG_GLSL_PATH = "/standardization_frag.glsl";
+
+function webCodecsAvailable(): boolean {
+  return (
+    typeof VideoEncoder !== "undefined" &&
+    typeof AudioEncoder !== "undefined" &&
+    typeof VideoFrame !== "undefined" &&
+    typeof AudioData !== "undefined"
+  );
+}
+
+function loadImage(file: File): Promise<HTMLImageElement> {
+  return new Promise((res, rej) => {
+    const img = new Image();
+    img.onload = () => res(img);
+    img.onerror = rej;
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+function loadVideo(file: File): Promise<HTMLVideoElement> {
+  return new Promise((res, rej) => {
+    const v = document.createElement("video");
+    v.muted = true;
+    v.playsInline = true;
+    v.crossOrigin = "anonymous";
+    v.onloadedmetadata = () => res(v);
+    v.onerror = rej;
+    v.src = URL.createObjectURL(file);
+  });
+}
+
+// Draw cover into a 2D canvas at output dims using "cover" fit (fills, crops overflow)
+function drawCover(ctx: CanvasRenderingContext2D, img: HTMLImageElement, w: number, h: number) {
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, w, h);
+  const scale = Math.max(w / img.naturalWidth, h / img.naturalHeight);
+  const dw = img.naturalWidth * scale;
+  const dh = img.naturalHeight * scale;
+  ctx.drawImage(img, (w - dw) / 2, (h - dh) / 2, dw, dh);
+}
+
+// Process the video's audio (compressor + hash phase) — returns buffer of video length
+async function processAudio(file: File): Promise<AudioBuffer | null> {
+  let decoded: AudioBuffer;
+  try {
+    const buf = await file.arrayBuffer();
+    const tmp = new AudioContext();
+    try { decoded = await tmp.decodeAudioData(buf); }
+    finally { await tmp.close(); }
+  } catch {
+    return null; // video may have no audio track
+  }
+
+  const ch = Math.min(decoded.numberOfChannels, 2);
+  const off = new OfflineAudioContext(2, decoded.length, decoded.sampleRate);
+  const src = off.createBufferSource();
+  src.buffer = decoded;
+
+  const comp = off.createDynamicsCompressor();
+  comp.threshold.value = -18;
+  comp.knee.value = 6;
+  comp.ratio.value = 4;
+  comp.attack.value = 0.003;
+  comp.release.value = 0.25;
+
+  if (ch === 1) {
+    src.connect(comp);
+    comp.connect(off.destination);
+  } else {
+    src.connect(comp);
+    comp.connect(off.destination);
+  }
+  src.start();
+  return off.startRendering();
+}
+
+export async function processCreative(opts: CreativeOptions): Promise<Blob | null> {
+  const { coverFile, videoFile, onProgress, cancelRef } = opts;
+  if (!webCodecsAvailable()) return null;
+
+  const { Muxer, ArrayBufferTarget } = await import("mp4-muxer");
+
+  onProgress(0.01, "Carregando arquivos…");
+  const [coverImg, video] = await Promise.all([loadImage(coverFile), loadVideo(videoFile)]);
+
+  // Output dimensions — force even for H.264
+  const w = (video.videoWidth  || 720)  & ~1;
+  const h = (video.videoHeight || 1280) & ~1;
+  const videoDuration = video.duration;
+  const totalDuration = INTRO_SECONDS + videoDuration + OUTRO_SECONDS;
+
+  // ── Cover 2D canvas (source for intro + outro frames) ──────────────────────
+  const coverCanvas = document.createElement("canvas");
+  coverCanvas.width = w; coverCanvas.height = h;
+  const coverCtx = coverCanvas.getContext("2d")!;
+  drawCover(coverCtx, coverImg, w, h);
+
+  // ── WebGL canvas (source for effect-processed video frames) ────────────────
+  const glCanvas = document.createElement("canvas");
+  glCanvas.width = w; glCanvas.height = h;
+  const gl = glCanvas.getContext("webgl2");
+  if (!gl) return null;
+
+  const fragSrc = await fetch(FRAG_GLSL_PATH).then((r) => r.text());
+  const program = createProgram(gl, fragSrc);
+  const vao = setupFullscreenQuad(gl, program);
+  const tex = createTexture(gl);
+  gl.viewport(0, 0, w, h);
+  gl.useProgram(program);
+
+  const hashSeed = Math.random();
+  const loc = (n: string) => gl.getUniformLocation(program, n);
+  const uContrast   = loc("u_contrast_curve");
+  const uChromatic  = loc("u_chromatic_offset");
+  const uMotion     = loc("u_motion_blur_weight");
+  const uNoiseDens  = loc("u_noise_density");
+  const uNoiseOn    = loc("u_noise_enabled");
+  const uFlipV      = loc("u_flip_v");
+  const uFlipH      = loc("u_flip_h");
+  const uHash       = loc("u_hash_seed");
+  const uPixel      = loc("u_crackle_intensity");
+  const uFlash      = loc("u_flash");
+  const uTime       = loc("u_time");
+  const uTexture    = loc("u_texture");
+  const uPrev       = loc("u_prev_texture");
+
+  const renderVideoFrame = (mediaTime: number) => {
+    uploadVideoTexture(gl, tex, video);
+    gl.useProgram(program);
+    gl.bindVertexArray(vao);
+    gl.uniform1f(uContrast,  PRESET.contrast);
+    gl.uniform1f(uChromatic, PRESET.chromatic);
+    gl.uniform1f(uMotion,    0);
+    gl.uniform1f(uNoiseDens, PRESET.noise);
+    gl.uniform1f(uNoiseOn,   1);
+    gl.uniform1f(uFlipV,     0);
+    gl.uniform1f(uFlipH,     0);
+    gl.uniform1f(uHash,      hashSeed);
+    gl.uniform1f(uPixel,     PRESET.pixelation);
+    gl.uniform1f(uFlash,     PRESET.flash);
+    gl.uniform1f(uTime,      mediaTime);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.uniform1i(uTexture, 0);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, tex); // reuse as prev (motion weight = 0 → unused)
+    gl.uniform1i(uPrev, 1);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.bindVertexArray(null);
+    gl.finish(); // ensure GPU done before VideoFrame reads the canvas
+  };
+
+  // ── Muxer + encoders ───────────────────────────────────────────────────────
+  const target = new ArrayBufferTarget();
+  const audioBuf = await processAudio(videoFile);
+  const hasAudio = !!audioBuf;
+  const audioSampleRate = audioBuf?.sampleRate ?? 44100;
+
+  const muxer = new Muxer({
+    target,
+    video: { codec: "avc", width: w, height: h },
+    ...(hasAudio ? { audio: { codec: "aac", numberOfChannels: 2, sampleRate: audioSampleRate } } : {}),
+    firstTimestampBehavior: "offset",
+    fastStart: "in-memory",
+  });
+
+  const videoEncoder = new VideoEncoder({
+    output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
+    error: (e) => console.error("VideoEncoder:", e),
+  });
+  videoEncoder.configure({
+    codec: "avc1.4d0028",              // H.264 Main Level 4.0 (supports 720x1280)
+    width: w, height: h,
+    bitrate: 3_500_000,
+    framerate: VIDEO_FPS,
+    hardwareAcceleration: "no-preference",
+    avc: { format: "avc" },
+  });
+
+  let frameIndex = 0;
+  const encodeCanvasFrame = async (
+    source: HTMLCanvasElement,
+    tsSeconds: number,
+    keyFrame: boolean
+  ) => {
+    const vf = new VideoFrame(source, { timestamp: Math.round(tsSeconds * 1_000_000) });
+    videoEncoder.encode(vf, { keyFrame });
+    vf.close();
+    frameIndex++;
+    if (videoEncoder.encodeQueueSize > 8) {
+      await new Promise<void>((r) => {
+        const check = () => (videoEncoder.encodeQueueSize <= 4 ? r() : setTimeout(check, 8));
+        check();
+      });
+    }
+  };
+
+  // ── Phase 1: intro cover ────────────────────────────────────────────────────
+  onProgress(0.03, "Montando capa de abertura…");
+  const introFrames = Math.round(INTRO_SECONDS * COVER_FPS);
+  for (let i = 0; i < introFrames; i++) {
+    if (cancelRef.cancelled) { videoEncoder.close(); return null; }
+    const ts = i / COVER_FPS;
+    await encodeCanvasFrame(coverCanvas, ts, i % COVER_FPS === 0);
+  }
+
+  // ── Phase 2: video with effects ─────────────────────────────────────────────
+  onProgress(0.08, "Processando vídeo…");
+  await new Promise<void>((res) => {
+    if (video.currentTime === 0) return res();
+    const hh = () => { video.removeEventListener("seeked", hh); res(); };
+    video.addEventListener("seeked", hh);
+    video.currentTime = 0;
+  });
+  video.play().catch(() => {});
+
+  let lastVideoTs = 0;
+  await new Promise<void>((resolve, reject) => {
+    let finished = false;
+    const done = () => { if (!finished) { finished = true; video.pause(); resolve(); } };
+    const safety = setTimeout(done, (videoDuration + 20) * 1000);
+    video.onended = () => { clearTimeout(safety); done(); };
+
+    const cb = (_n: DOMHighResTimeStamp, meta: { mediaTime: number }) => {
+      if (cancelRef.cancelled || finished) { clearTimeout(safety); done(); return; }
+      try {
+        const mt = meta.mediaTime;
+        if (mt * 1_000_000 > lastVideoTs) {
+          renderVideoFrame(mt);
+          const ts = INTRO_SECONDS + mt;
+          const vf = new VideoFrame(glCanvas, { timestamp: Math.round(ts * 1_000_000) });
+          videoEncoder.encode(vf, { keyFrame: frameIndex % 60 === 0 });
+          vf.close();
+          frameIndex++;
+          lastVideoTs = Math.round(mt * 1_000_000);
+          onProgress(0.08 + Math.min(mt / videoDuration, 1) * 0.55, "Processando vídeo…");
+          if (videoEncoder.encodeQueueSize > 8) {
+            // best-effort throttle without blocking the RVFC callback flow
+          }
+        }
+        video.requestVideoFrameCallback(cb);
+      } catch (e) { clearTimeout(safety); reject(e); }
+    };
+    video.requestVideoFrameCallback(cb);
+  });
+  if (cancelRef.cancelled) { videoEncoder.close(); return null; }
+
+  const videoEndTs = INTRO_SECONDS + videoDuration;
+
+  // ── Phase 3: outro cover (5 min) ────────────────────────────────────────────
+  onProgress(0.64, "Segurando capa por 5 minutos…");
+  const outroFrames = Math.round(OUTRO_SECONDS * COVER_FPS);
+  for (let i = 0; i < outroFrames; i++) {
+    if (cancelRef.cancelled) { videoEncoder.close(); return null; }
+    const ts = videoEndTs + i / COVER_FPS;
+    await encodeCanvasFrame(coverCanvas, ts, i % (COVER_FPS * 2) === 0);
+    if (i % 30 === 0) onProgress(0.64 + (i / outroFrames) * 0.22, "Segurando capa por 5 minutos…");
+  }
+
+  await videoEncoder.flush();
+  videoEncoder.close();
+
+  // ── Audio: silence during covers, real audio during the video window ────────
+  if (hasAudio && audioBuf) {
+    onProgress(0.88, "Codificando áudio…");
+    const audioEncoder = new AudioEncoder({
+      output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
+      error: (e) => console.error("AudioEncoder:", e),
+    });
+    audioEncoder.configure({
+      codec: "mp4a.40.2",
+      sampleRate: audioSampleRate,
+      numberOfChannels: 2,
+      bitrate: 128_000,
+    });
+
+    const sr = audioSampleRate;
+    const CHUNK = 1024;
+    const totalSamples = Math.ceil(totalDuration * sr);
+    const introSamples = Math.round(INTRO_SECONDS * sr);
+    const videoSamples = audioBuf.length;
+    const aCh0 = audioBuf.getChannelData(0);
+    const aCh1 = audioBuf.numberOfChannels > 1 ? audioBuf.getChannelData(1) : aCh0;
+
+    for (let i = 0; i < totalSamples; i += CHUNK) {
+      if (cancelRef.cancelled) { audioEncoder.close(); return null; }
+      const frames = Math.min(CHUNK, totalSamples - i);
+      const planar = new Float32Array(frames * 2); // zeroed = silence
+
+      // Overlap of [i, i+frames) with the video window [introSamples, introSamples+videoSamples)
+      const winStart = introSamples;
+      const winEnd = introSamples + videoSamples;
+      const from = Math.max(i, winStart);
+      const to = Math.min(i + frames, winEnd);
+      if (from < to) {
+        for (let s = from; s < to; s++) {
+          const dst = s - i;              // index within this chunk
+          const srcIdx = s - introSamples; // index within processed audio
+          planar[dst] = aCh0[srcIdx];
+          planar[frames + dst] = aCh1[srcIdx];
+        }
+      }
+
+      const ad = new AudioData({
+        format: "f32-planar",
+        sampleRate: sr,
+        numberOfChannels: 2,
+        numberOfFrames: frames,
+        timestamp: Math.round((i / sr) * 1_000_000),
+        data: planar,
+      });
+      audioEncoder.encode(ad);
+      ad.close();
+    }
+    await audioEncoder.flush();
+    audioEncoder.close();
+  }
+
+  muxer.finalize();
+  onProgress(1, "Concluído");
+
+  // Cleanup
+  URL.revokeObjectURL(video.src);
+  URL.revokeObjectURL(coverImg.src);
+  gl.deleteProgram(program);
+
+  return new Blob([target.buffer], { type: "video/mp4" });
+}

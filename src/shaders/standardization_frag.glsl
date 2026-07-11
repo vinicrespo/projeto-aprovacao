@@ -13,6 +13,7 @@ uniform float u_flip_v;
 uniform float u_flip_h;
 uniform float u_hash_seed;
 uniform float u_crackle_intensity; // pixelation: 0 = off, 1 = max
+uniform float u_flash;             // screen flicker/flash intensity: 0 = off, 1 = strong
 
 in vec2 v_texcoord;
 out vec4 fragColor;
@@ -104,7 +105,16 @@ void main() {
   float grain = grainDither(uv, u_noise_density, u_time) * u_noise_enabled;
   color += grain;
 
-  // 7. Hash-bust noise
+  // 7. Screen flashing / flicker — subtle per-frame brightness variation
+  //    plus occasional stronger pulse, evoking a "live processing" look
+  if (u_flash > 0.001) {
+    float f       = hash(vec2(floor(u_time * 30.0), 1.7));   // per-frame random
+    float flicker = 1.0 + (f - 0.5) * 0.14 * u_flash;        // ±7% brightness
+    float pulse   = step(0.90, hash(vec2(floor(u_time * 8.0), 3.1))) * 0.15 * u_flash;
+    color *= flicker + pulse;
+  }
+
+  // 8. Hash-bust noise
   vec2 hashUV = uv + vec2(u_hash_seed * 7.3, u_hash_seed * 3.7);
   float hashNoise = (noise(hashUV * 2048.0 + u_hash_seed * 100.0) * 2.0 - 1.0) * (1.5 / 255.0);
   color += hashNoise;

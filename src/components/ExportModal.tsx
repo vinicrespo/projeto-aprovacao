@@ -4,9 +4,10 @@ interface Props {
   progress: number;
   done: boolean;
   onCancel: () => void;
+  phaseLabel?: string;
 }
 
-export function ExportModal({ progress, done, onCancel }: Props) {
+export function ExportModal({ progress, done, onCancel, phaseLabel }: Props) {
   const pct = Math.round(progress * 100);
 
   if (done) {
@@ -52,9 +53,9 @@ export function ExportModal({ progress, done, onCancel }: Props) {
 
         <div className="text-center">
           <p className="text-sm font-medium text-white">
-            {pct < 20 ? "Processando áudio…" : pct < 90 ? "Renderizando frames…" : "Finalizando MP4…"}
+            {phaseLabel ?? (pct < 20 ? "Processando áudio…" : pct < 90 ? "Renderizando frames…" : "Finalizando MP4…")}
           </p>
-          <p className="text-xs text-white/35 mt-1">Aplicando correções e randomizando hash</p>
+          <p className="text-xs text-white/35 mt-1">Aplicando efeitos e randomizando hash</p>
         </div>
 
         <div className="w-full h-1 bg-white/10 rounded-full overflow-hidden">
