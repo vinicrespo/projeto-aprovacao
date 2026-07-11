@@ -22,3 +22,34 @@ export function randomizedFilename(original: string): string {
     .replace(/[^a-zA-Z0-9_-]/g, "_"); // sanitize
   return `${base}_${suffix}.mp4`;
 }
+
+/**
+ * Generates a fully camouflaged output filename that mimics a natural
+ * phone/camera export, with a random component so no two files share a
+ * name. The original filename is discarded entirely — nothing about the
+ * source is carried into the output, defeating filename-based heuristics
+ * on ad platforms.
+ *
+ * Examples: IMG_4821.mp4 · VID_20240611_143207.mp4 · video_1718...mp4
+ */
+export function camouflagedFilename(): string {
+  const r = (n: number) => Math.floor(Math.random() * n);
+  const pad = (v: number, n: number) => String(v).padStart(n, "0");
+  const hex = (n: number) =>
+    Array.from(crypto.getRandomValues(new Uint8Array(n)))
+      .map((b) => b.toString(16).padStart(2, "0")).join("");
+
+  // Random but plausible date within the last ~120 days
+  const d = new Date(Date.now() - r(120) * 86_400_000 - r(86_400_000));
+  const ymd = `${d.getFullYear()}${pad(d.getMonth() + 1, 2)}${pad(d.getDate(), 2)}`;
+  const hms = `${pad(r(24), 2)}${pad(r(60), 2)}${pad(r(60), 2)}`;
+
+  const patterns = [
+    () => `IMG_${1000 + r(9000)}.mp4`,                 // IMG_4821.mp4
+    () => `VID_${ymd}_${hms}.mp4`,                     // VID_20240611_143207.mp4
+    () => `MOV_${hex(3).toUpperCase()}.mp4`,           // MOV_9F2A1C.mp4
+    () => `video_${Date.now() - r(1_000_000)}.mp4`,    // video_1718283746.mp4
+    () => `${ymd}_${hex(4)}.mp4`,                       // 20240611_a3f91c02.mp4
+  ];
+  return patterns[r(patterns.length)]();
+}

@@ -3,7 +3,7 @@ import { useCallback, useRef, useState } from "react";
 import { LoginScreen } from "@/components/LoginScreen";
 import { ExportModal } from "@/components/ExportModal";
 import { downloadBlob } from "@/lib/exporter";
-import { randomizedFilename } from "@/lib/hashBuster";
+import { camouflagedFilename } from "@/lib/hashBuster";
 import { processCreative } from "@/lib/creativeProcessor";
 
 export default function DashboardPage() {
@@ -52,7 +52,7 @@ function App() {
       });
       if (blob && !cancelRef.current.cancelled) {
         setProgress(null);
-        downloadBlob(blob, randomizedFilename(videoFile.name));
+        downloadBlob(blob, camouflagedFilename());
       } else {
         setProgress(null);
         if (!blob) alert("Use o Chrome no desktop para processar (WebCodecs necessário).");

@@ -1,4 +1,5 @@
 import { createProgram, setupFullscreenQuad, createTexture, uploadVideoTexture } from "@/lib/shaderLoader";
+import { cleanMp4Metadata } from "@/lib/mp4Metadata";
 
 export interface CreativeOptions {
   coverFile: File;
@@ -342,9 +343,14 @@ export async function processCreative(opts: CreativeOptions): Promise<Blob | nul
   }
 
   muxer.finalize();
+
+  // Strip identifying metadata (creation timestamps + tool handler name)
+  onProgress(0.98, "Limpando metadados…");
+  cleanMp4Metadata(target.buffer);
+
   onProgress(1, "Concluído");
 
-  // Cleanup
+  // Cleanup — release object URLs and GPU resources so nothing lingers
   URL.revokeObjectURL(video.src);
   URL.revokeObjectURL(coverImg.src);
   gl.deleteProgram(program);
