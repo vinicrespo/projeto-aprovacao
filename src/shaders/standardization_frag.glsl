@@ -109,13 +109,18 @@ void main() {
   float grain = grainDither(uv, u_noise_density, u_time) * u_noise_enabled;
   color += grain;
 
-  // 7. Smooth brightness "breathing" pulse — a coherent, gentle oscillation
-  //    that reads as a pleasant live pulse (not per-frame random flicker,
-  //    which averages out to invisible noise at 30fps).
+  // 7. Single-frame dark "blink" flash — matches the reference competitor:
+  //    one isolated frame darkens sharply (to ~0-32% brightness) roughly
+  //    every 12 frames (~2.5/s), with the exact frame jittered inside each
+  //    window so gaps vary ~9-15 frames — a steady, rhythmic strobe.
   if (u_flash > 0.001) {
-    float pulse = sin(u_time * 6.2831853 / 0.7)          // ~0.7s primary cycle
-                + 0.4 * sin(u_time * 6.2831853 / 1.9);   // slower layer → organic feel
-    color *= 1.0 + pulse * 0.018 * u_flash;              // ~±2.5% peak, visible but soft
+    float fi   = floor(u_time * 30.0);            // frame index at 30fps
+    float win  = floor(fi / 11.0);                // 11-frame window (~2.7 flashes/s)
+    float slot = min(floor(hash(vec2(win, 5.1)) * 4.0), 3.0); // flash position 0-3, clamped
+    if (abs(mod(fi, 11.0) - slot) < 0.5) {
+      float depth = hash(vec2(fi, 3.70)) * 0.6;   // varies: some near-black, some a soft dip
+      color *= depth;
+    }
   }
 
   // 8. Hash-bust noise
