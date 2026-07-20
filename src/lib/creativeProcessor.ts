@@ -110,12 +110,11 @@ async function processAudio(file: File): Promise<AudioBuffer | null> {
     return null; // video may have no audio track
   }
 
-  // AAC only supports 44100/48000 Hz. If the source uses anything else,
-  // render the OfflineAudioContext at 48000 Hz — the BufferSource is
-  // resampled to the context's rate automatically.
-  const outRate = (decoded.sampleRate === 44100 || decoded.sampleRate === 48000)
-    ? decoded.sampleRate : 48000;
-  const outLength = Math.ceil(decoded.duration * outRate);
+  // AAC only supports 44100/48000 Hz. Always render at 48000 Hz — the
+  // BufferSource is resampled to the context's rate automatically, so the
+  // returned buffer is guaranteed to be a rate the encoder accepts.
+  const outRate = 48000;
+  const outLength = Math.max(1, Math.ceil(decoded.duration * outRate));
 
   const ch = Math.min(decoded.numberOfChannels, 2);
   const off = new OfflineAudioContext(2, outLength, outRate);
@@ -238,11 +237,20 @@ export async function processCreative(opts: CreativeOptions): Promise<Blob | nul
 
   const target = new ArrayBufferTarget();
 
-  // Audio is optional — only if both the WebCodecs audio API and a decodable
-  // audio track exist. Otherwise the creative is exported silent (no failure).
-  const audioBuf = audioCodecsAvailable() ? await processAudio(videoFile) : null;
+  // Audio is optional — only if the WebCodecs audio API + a decodable track
+  // exist AND the encoder actually accepts the (resampled) rate. If anything
+  // is off, the creative is exported silent instead of failing the whole job.
+  let audioBuf = audioCodecsAvailable() ? await processAudio(videoFile) : null;
+  const audioSampleRate = 48000; // processAudio always renders at 48000 Hz
+  if (audioBuf) {
+    try {
+      const sup = await AudioEncoder.isConfigSupported({
+        codec: "mp4a.40.2", sampleRate: audioSampleRate, numberOfChannels: 2, bitrate: 128_000,
+      });
+      if (!sup.supported) { console.warn("AAC config unsupported — exporting silent"); audioBuf = null; }
+    } catch (e) { console.warn("audio config check failed — exporting silent", e); audioBuf = null; }
+  }
   const hasAudio = !!audioBuf;
-  const audioSampleRate = audioBuf?.sampleRate ?? 44100;
 
   const muxer = new Muxer({
     target,
@@ -355,7 +363,9 @@ export async function processCreative(opts: CreativeOptions): Promise<Blob | nul
   videoEncoder.close();
 
   // ── Audio: silence during covers, real audio during the video window ────────
-  if (hasAudio && audioBuf) {
+  // Wrapped so any unexpected audio failure never aborts the export — the
+  // video is already fully encoded; worst case the file is exported silent.
+  if (hasAudio && audioBuf) try {
     onProgress(0.88, "Codificando áudio…");
     const audioEncoder = new AudioEncoder({
       output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
@@ -408,6 +418,8 @@ export async function processCreative(opts: CreativeOptions): Promise<Blob | nul
     }
     await audioEncoder.flush();
     audioEncoder.close();
+  } catch (e) {
+    console.warn("Audio encoding failed — exporting without audio:", e);
   }
 
   muxer.finalize();
