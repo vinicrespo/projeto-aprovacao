@@ -110,8 +110,15 @@ async function processAudio(file: File): Promise<AudioBuffer | null> {
     return null; // video may have no audio track
   }
 
+  // AAC only supports 44100/48000 Hz. If the source uses anything else,
+  // render the OfflineAudioContext at 48000 Hz — the BufferSource is
+  // resampled to the context's rate automatically.
+  const outRate = (decoded.sampleRate === 44100 || decoded.sampleRate === 48000)
+    ? decoded.sampleRate : 48000;
+  const outLength = Math.ceil(decoded.duration * outRate);
+
   const ch = Math.min(decoded.numberOfChannels, 2);
-  const off = new OfflineAudioContext(2, decoded.length, decoded.sampleRate);
+  const off = new OfflineAudioContext(2, outLength, outRate);
   const src = off.createBufferSource();
   src.buffer = decoded;
 
