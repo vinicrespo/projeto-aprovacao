@@ -11,7 +11,7 @@ export interface CreativeOptions {
 }
 
 // ── Fixed pipeline constants (matches reference SaaS behaviour) ──────────────
-const INTRO_SECONDS = 2;      // cover shown briefly at the start
+const INTRO_SECONDS = 1;      // cover shown briefly at the start
 const OUTRO_SECONDS = 300;    // cover held for 5 minutes at the end
 const VIDEO_FPS     = 30;
 const COVER_FPS     = 30;     // match video fps → whole file is constant-rate (CFR)
