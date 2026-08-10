@@ -14,57 +14,80 @@ export default function DashboardPage() {
   return <App />;
 }
 
+interface VideoItem { id: string; file: File; url: string; }
+
 function App() {
   const [coverFile, setCoverFile] = useState<File | null>(null);
-  const [videoFile, setVideoFile] = useState<File | null>(null);
   const [coverUrl, setCoverUrl] = useState<string | null>(null);
-  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [videos, setVideos] = useState<VideoItem[]>([]);
 
   const [progress, setProgress] = useState<number | null>(null);
   const [phase, setPhase] = useState("");
   const cancelRef = useRef<{ cancelled: boolean }>({ cancelled: false });
 
-  const pickCover = useCallback((file: File) => {
+  const pickCover = useCallback((files: File[]) => {
+    const file = files[0];
+    if (!file) return;
     if (!file.type.startsWith("image/")) { alert("A capa deve ser uma imagem (JPG, PNG…)."); return; }
     setCoverFile(file);
     setCoverUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return URL.createObjectURL(file); });
   }, []);
 
-  const pickVideo = useCallback((file: File) => {
-    if (!file.type.startsWith("video/")) { alert("Envie um vídeo (MP4, MOV…)."); return; }
-    setVideoFile(file);
-    setVideoUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return URL.createObjectURL(file); });
+  const addVideos = useCallback((files: File[]) => {
+    const vids = files.filter((f) => f.type.startsWith("video/"));
+    if (vids.length === 0) { alert("Envie vídeos (MP4, MOV…)."); return; }
+    setVideos((prev) => [
+      ...prev,
+      ...vids.map((file) => ({ id: `${file.name}-${file.size}-${Math.random().toString(36).slice(2, 8)}`, file, url: URL.createObjectURL(file) })),
+    ]);
   }, []);
 
-  const canProcess = coverFile && videoFile && progress === null;
+  const removeVideo = useCallback((id: string) => {
+    setVideos((prev) => {
+      const v = prev.find((x) => x.id === id);
+      if (v) URL.revokeObjectURL(v.url);
+      return prev.filter((x) => x.id !== id);
+    });
+  }, []);
+
+  const canProcess = coverFile && videos.length > 0 && progress === null;
 
   const handleProcess = useCallback(async () => {
-    if (!coverFile || !videoFile || progress !== null) return;
+    if (!coverFile || videos.length === 0 || progress !== null) return;
     cancelRef.current = { cancelled: false };
-    setProgress(0);
-    setPhase("Iniciando…");
-    try {
-      const blob = await processCreative({
-        coverFile,
-        videoFile,
-        onProgress: (r, p) => { setProgress(r); setPhase(p); },
-        cancelRef: cancelRef.current,
-      });
-      if (blob && !cancelRef.current.cancelled) {
-        setProgress(null);
-        downloadBlob(blob, camouflagedFilename());
-      } else {
-        setProgress(null);
+    const total = videos.length;
+    let failures = 0;
+
+    for (let i = 0; i < total; i++) {
+      if (cancelRef.current.cancelled) break;
+      const item = videos[i];
+      const prefix = total > 1 ? `Vídeo ${i + 1}/${total} · ` : "";
+      setProgress(0);
+      setPhase(`${prefix}Iniciando…`);
+      try {
+        const blob = await processCreative({
+          coverFile,
+          videoFile: item.file,
+          onProgress: (r, p) => { setProgress(r); setPhase(`${prefix}${p}`); },
+          cancelRef: cancelRef.current,
+        });
+        if (blob && !cancelRef.current.cancelled) {
+          downloadBlob(blob, camouflagedFilename());
+          // brief spacing so the browser accepts back-to-back downloads
+          await new Promise((res) => setTimeout(res, 800));
+        }
+      } catch (e) {
+        console.error(`Falha no vídeo ${i + 1}:`, e);
+        failures++;
       }
-    } catch (e) {
-      console.error("Process failed:", e);
-      setProgress(null);
-      const msg = e instanceof Error && e.message
-        ? e.message
-        : "Falha ao processar o criativo. Verifique os arquivos e tente novamente.";
-      alert(msg);
     }
-  }, [coverFile, videoFile, progress]);
+
+    setProgress(null);
+    setPhase("");
+    if (failures > 0 && !cancelRef.current.cancelled) {
+      alert(`${failures} de ${total} vídeo(s) falharam. Os demais foram baixados.`);
+    }
+  }, [coverFile, videos, progress]);
 
   const cancel = useCallback(() => { cancelRef.current.cancelled = true; setProgress(null); }, []);
 
@@ -94,9 +117,9 @@ function App() {
       <main className="flex-1 flex items-start justify-center p-6 overflow-y-auto">
         <div className="w-full max-w-2xl flex flex-col gap-6 mt-4">
           <div className="text-center">
-            <h2 className="text-lg font-semibold text-white">Processar Criativo</h2>
+            <h2 className="text-lg font-semibold text-white">Processar Criativos</h2>
             <p className="text-sm text-white/40 mt-1">
-              Suba a capa (CTA) e o vídeo. A capa entra na abertura e fica 5 minutos no final.
+              Suba a capa (CTA) e um ou mais vídeos. Cada vídeo é processado e baixado individualmente.
             </p>
           </div>
 
@@ -104,22 +127,42 @@ function App() {
           <StepCard step={1} title="Capa (CTA)" done={!!coverFile}>
             <UploadSlot
               accept="image/*"
-              onFile={pickCover}
+              onFiles={pickCover}
               label={coverFile ? coverFile.name : "Clique ou arraste a imagem de capa"}
               preview={coverUrl ? <img src={coverUrl} alt="capa" className="h-full w-full object-cover" /> : null}
               tall
             />
           </StepCard>
 
-          {/* Step 2 — Video */}
-          <StepCard step={2} title="Vídeo" done={!!videoFile}>
-            <UploadSlot
-              accept="video/*"
-              onFile={pickVideo}
-              label={videoFile ? videoFile.name : "Clique ou arraste o vídeo"}
-              preview={videoUrl ? <video src={videoUrl} muted loop autoPlay playsInline className="h-full w-full object-cover" /> : null}
-              tall
-            />
+          {/* Step 2 — Videos (multiple) */}
+          <StepCard step={2} title={`Vídeos${videos.length ? ` (${videos.length})` : ""}`} done={videos.length > 0}>
+            <div className="flex flex-col gap-3">
+              <UploadSlot
+                accept="video/*"
+                multiple
+                onFiles={addVideos}
+                label={videos.length ? "Adicionar mais vídeos" : "Clique ou arraste um ou mais vídeos"}
+                preview={null}
+              />
+              {videos.length > 0 && (
+                <div className="flex flex-col gap-2">
+                  {videos.map((v, i) => (
+                    <div key={v.id} className="flex items-center gap-3 rounded-lg bg-white/5 border border-white/8 p-2">
+                      <video src={v.url} muted className="w-14 h-14 rounded object-cover bg-black" />
+                      <span className="flex-1 text-xs text-white/70 truncate">{i + 1}. {v.file.name}</span>
+                      <button
+                        onClick={() => removeVideo(v.id)}
+                        disabled={progress !== null}
+                        className="text-white/30 hover:text-red-400 disabled:opacity-30 text-lg px-2 leading-none"
+                        title="Remover"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </StepCard>
 
           {/* Step 3 — Process */}
@@ -134,11 +177,11 @@ function App() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                 d="M13 10V3L4 14h7v7l9-11h-7z" />
             </svg>
-            Processar
+            {videos.length > 1 ? `Processar ${videos.length} vídeos` : "Processar"}
           </button>
 
           <p className="text-center text-[11px] text-white/25">
-            Abertura ~2s · vídeo com efeitos · capa segurada por 5 min no final · exporta MP4
+            Abertura 1s · vídeo com efeitos · capa segurada por 5 min no final · exporta MP4
           </p>
         </div>
       </main>
@@ -163,8 +206,8 @@ function StepCard({ step, title, done, children }: {
   );
 }
 
-function UploadSlot({ accept, onFile, label, preview, tall }: {
-  accept: string; onFile: (f: File) => void; label: string; preview: React.ReactNode; tall?: boolean;
+function UploadSlot({ accept, onFiles, label, preview, tall, multiple }: {
+  accept: string; onFiles: (f: File[]) => void; label: string; preview: React.ReactNode; tall?: boolean; multiple?: boolean;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [drag, setDrag] = useState(false);
@@ -173,13 +216,13 @@ function UploadSlot({ accept, onFile, label, preview, tall }: {
       onClick={() => inputRef.current?.click()}
       onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
       onDragLeave={() => setDrag(false)}
-      onDrop={(e) => { e.preventDefault(); setDrag(false); const f = e.dataTransfer.files[0]; if (f) onFile(f); }}
+      onDrop={(e) => { e.preventDefault(); setDrag(false); const fs = Array.from(e.dataTransfer.files); if (fs.length) onFiles(fs); }}
       className={`relative rounded-xl border-2 border-dashed cursor-pointer overflow-hidden
         transition-all ${tall ? "h-44" : "h-28"}
         ${drag ? "border-brand-500 bg-brand-500/10" : "border-white/10 bg-white/3 hover:border-white/25"}`}
     >
-      <input ref={inputRef} type="file" accept={accept} className="hidden"
-        onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); }} />
+      <input ref={inputRef} type="file" accept={accept} multiple={multiple} className="hidden"
+        onChange={(e) => { const fs = Array.from(e.target.files ?? []); if (fs.length) onFiles(fs); e.target.value = ""; }} />
       {preview ? (
         <>
           <div className="absolute inset-0">{preview}</div>
