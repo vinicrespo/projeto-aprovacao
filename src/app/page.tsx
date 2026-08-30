@@ -19,6 +19,8 @@ interface VideoItem { id: string; file: File; url: string; }
 function App() {
   const [coverFile, setCoverFile] = useState<File | null>(null);
   const [coverUrl, setCoverUrl] = useState<string | null>(null);
+  const [endCoverFile, setEndCoverFile] = useState<File | null>(null);
+  const [endCoverUrl, setEndCoverUrl] = useState<string | null>(null);
   const [videos, setVideos] = useState<VideoItem[]>([]);
 
   const [progress, setProgress] = useState<number | null>(null);
@@ -31,6 +33,19 @@ function App() {
     if (!file.type.startsWith("image/")) { alert("A capa deve ser uma imagem (JPG, PNG…)."); return; }
     setCoverFile(file);
     setCoverUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return URL.createObjectURL(file); });
+  }, []);
+
+  const pickEndCover = useCallback((files: File[]) => {
+    const file = files[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) { alert("A imagem final deve ser uma imagem (JPG, PNG…)."); return; }
+    setEndCoverFile(file);
+    setEndCoverUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return URL.createObjectURL(file); });
+  }, []);
+
+  const clearEndCover = useCallback(() => {
+    setEndCoverFile(null);
+    setEndCoverUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
   }, []);
 
   const addVideos = useCallback((files: File[]) => {
@@ -67,6 +82,7 @@ function App() {
       try {
         const blob = await processCreative({
           coverFile,
+          endCoverFile: endCoverFile ?? undefined,
           videoFile: item.file,
           onProgress: (r, p) => { setProgress(r); setPhase(`${prefix}${p}`); },
           cancelRef: cancelRef.current,
@@ -87,7 +103,7 @@ function App() {
     if (failures > 0 && !cancelRef.current.cancelled) {
       alert(`${failures} de ${total} vídeo(s) falharam. Os demais foram baixados.`);
     }
-  }, [coverFile, videos, progress]);
+  }, [coverFile, endCoverFile, videos, progress]);
 
   const cancel = useCallback(() => { cancelRef.current.cancelled = true; setProgress(null); }, []);
 
@@ -123,19 +139,39 @@ function App() {
             </p>
           </div>
 
-          {/* Step 1 — Cover */}
-          <StepCard step={1} title="Capa (CTA)" done={!!coverFile}>
+          {/* Step 1 — Cover (intro) */}
+          <StepCard step={1} title="Capa inicial (abertura)" done={!!coverFile}>
             <UploadSlot
               accept="image/*"
               onFiles={pickCover}
-              label={coverFile ? coverFile.name : "Clique ou arraste a imagem de capa"}
+              label={coverFile ? coverFile.name : "Clique ou arraste a imagem de abertura"}
               preview={coverUrl ? <img src={coverUrl} alt="capa" className="h-full w-full object-cover" /> : null}
               tall
             />
           </StepCard>
 
-          {/* Step 2 — Videos (multiple) */}
-          <StepCard step={2} title={`Vídeos${videos.length ? ` (${videos.length})` : ""}`} done={videos.length > 0}>
+          {/* Step 2 — End image (optional) */}
+          <StepCard step={2} title="Imagem final (opcional)" done={!!endCoverFile}>
+            <p className="text-[11px] text-white/35 mb-3">
+              Imagem que fica nos 5 minutos após o vídeo. Se não enviar, usa a capa inicial.
+            </p>
+            <UploadSlot
+              accept="image/*"
+              onFiles={pickEndCover}
+              label={endCoverFile ? endCoverFile.name : "Clique ou arraste a imagem final (opcional)"}
+              preview={endCoverUrl ? <img src={endCoverUrl} alt="imagem final" className="h-full w-full object-cover" /> : null}
+              tall
+            />
+            {endCoverFile && (
+              <button onClick={clearEndCover} disabled={progress !== null}
+                className="mt-2 text-[11px] text-white/40 hover:text-red-400 disabled:opacity-30">
+                Remover imagem final (usar a capa inicial)
+              </button>
+            )}
+          </StepCard>
+
+          {/* Step 3 — Videos (multiple) */}
+          <StepCard step={3} title={`Vídeos${videos.length ? ` (${videos.length})` : ""}`} done={videos.length > 0}>
             <div className="flex flex-col gap-3">
               <UploadSlot
                 accept="video/*"

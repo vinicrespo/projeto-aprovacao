@@ -2,8 +2,9 @@ import { createProgram, setupFullscreenQuad, createTexture, uploadVideoTexture }
 import { cleanMp4Metadata } from "@/lib/mp4Metadata";
 
 export interface CreativeOptions {
-  coverFile: File;
+  coverFile: File;              // shown at the start (intro)
   videoFile: File;
+  endCoverFile?: File;          // shown for the 5-min tail; falls back to coverFile
   onProgress: (ratio: number, phase: string) => void;
   cancelRef: { cancelled: boolean };
   introSeconds?: number;  // override for testing; defaults to INTRO_SECONDS
@@ -140,7 +141,7 @@ async function processAudio(file: File): Promise<AudioBuffer | null> {
 }
 
 export async function processCreative(opts: CreativeOptions): Promise<Blob | null> {
-  const { coverFile, videoFile, onProgress, cancelRef } = opts;
+  const { coverFile, videoFile, endCoverFile, onProgress, cancelRef } = opts;
   const introSec = opts.introSeconds ?? INTRO_SECONDS;
   const outroSec = opts.outroSeconds ?? OUTRO_SECONDS;
 
@@ -156,6 +157,8 @@ export async function processCreative(opts: CreativeOptions): Promise<Blob | nul
 
   onProgress(0.01, "Carregando arquivos…");
   const [coverImg, video] = await Promise.all([loadImage(coverFile), loadVideo(videoFile)]);
+  // Optional distinct end image; falls back to the intro cover
+  const endImg = endCoverFile ? await loadImage(endCoverFile) : coverImg;
 
   // Output dimensions — force even for H.264
   const w = (video.videoWidth  || 720)  & ~1;
@@ -163,11 +166,18 @@ export async function processCreative(opts: CreativeOptions): Promise<Blob | nul
   const videoDuration = video.duration;
   const totalDuration = introSec + videoDuration + outroSec;
 
-  // ── Cover 2D canvas (source for intro + outro frames) ──────────────────────
+  // ── Cover 2D canvas (intro frames) ─────────────────────────────────────────
   const coverCanvas = document.createElement("canvas");
   coverCanvas.width = w; coverCanvas.height = h;
-  const coverCtx = coverCanvas.getContext("2d")!;
-  drawCover(coverCtx, coverImg, w, h);
+  drawCover(coverCanvas.getContext("2d")!, coverImg, w, h);
+
+  // ── End-cover 2D canvas (outro frames) — same canvas if no distinct end image
+  let endCanvas = coverCanvas;
+  if (endImg !== coverImg) {
+    endCanvas = document.createElement("canvas");
+    endCanvas.width = w; endCanvas.height = h;
+    drawCover(endCanvas.getContext("2d")!, endImg, w, h);
+  }
 
   // ── WebGL canvas (source for effect-processed video frames) ────────────────
   const glCanvas = document.createElement("canvas");
@@ -355,7 +365,7 @@ export async function processCreative(opts: CreativeOptions): Promise<Blob | nul
   for (let i = 0; i < outroFrames; i++) {
     if (cancelRef.cancelled) { videoEncoder.close(); return null; }
     const ts = videoEndTs + i / COVER_FPS;
-    await encodeCanvasFrame(coverCanvas, ts, i % (COVER_FPS * 2) === 0);
+    await encodeCanvasFrame(endCanvas, ts, i % (COVER_FPS * 2) === 0);
     if (i % 30 === 0) onProgress(0.64 + (i / outroFrames) * 0.22, "Segurando capa por 5 minutos…");
   }
 
@@ -433,6 +443,7 @@ export async function processCreative(opts: CreativeOptions): Promise<Blob | nul
   // Cleanup — release object URLs and GPU resources so nothing lingers
   URL.revokeObjectURL(video.src);
   URL.revokeObjectURL(coverImg.src);
+  if (endImg !== coverImg) URL.revokeObjectURL(endImg.src);
   gl.deleteProgram(program);
 
   return new Blob([target.buffer], { type: "video/mp4" });
