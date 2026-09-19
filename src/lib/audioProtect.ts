@@ -2,6 +2,7 @@ import { cleanMp4Metadata } from "@/lib/mp4Metadata";
 
 export interface AudioProtectOptions {
   videoFile: File;
+  intensity?: number; // 0–100 (default 100); scales all obfuscation layers
   onProgress: (ratio: number, phase: string) => void;
   cancelRef: { cancelled: boolean };
 }
@@ -88,17 +89,33 @@ function makeNoise(ctx: BaseAudioContext, seconds: number): AudioBuffer {
  * transcription (competing/reversed speech layers, pitch warble, tremolo,
  * reverb smearing, and a speech-band noise floor). Rendered at 48000 Hz.
  */
-async function buildProtectedAudio(file: File): Promise<AudioBuffer | null> {
-  let decoded: AudioBuffer;
+async function decodeFile(file: File): Promise<AudioBuffer | null> {
   try {
     const buf = await file.arrayBuffer();
     const tmp = new AudioContext();
-    try { decoded = await tmp.decodeAudioData(buf); }
+    try { return await tmp.decodeAudioData(buf); }
     finally { await tmp.close(); }
   } catch {
     return null; // no decodable audio track
   }
+}
 
+// Copy the first `seconds` of a decoded buffer (for fast previews).
+function trimBuffer(ctx: BaseAudioContext, decoded: AudioBuffer, seconds: number): AudioBuffer {
+  const n = Math.min(decoded.length, Math.ceil(seconds * decoded.sampleRate));
+  const ch = Math.min(decoded.numberOfChannels, 2);
+  const out = ctx.createBuffer(ch, n, decoded.sampleRate);
+  for (let c = 0; c < ch; c++) out.getChannelData(c).set(decoded.getChannelData(c).subarray(0, n));
+  return out;
+}
+
+/**
+ * Renders the obfuscated audio from a decoded buffer at 48000 Hz.
+ * `intensity` (0–1) scales every obfuscation layer: 0 = clean voice only,
+ * 1 = full aggressive blindagem.
+ */
+async function renderProtected(decoded: AudioBuffer, intensity: number): Promise<AudioBuffer> {
+  const k = Math.max(0, Math.min(1, intensity));
   const dur = decoded.duration;
   const len = Math.max(1, Math.ceil(dur * OUT_RATE));
   const off = new OfflineAudioContext(2, len, OUT_RATE);
@@ -108,41 +125,42 @@ async function buildProtectedAudio(file: File): Promise<AudioBuffer | null> {
   master.attack.value = 0.003; master.release.value = 0.25;
   master.connect(off.destination);
 
-  // Reverb bus (smears phonemes)
+  // Reverb bus (smears phonemes) — wetness scales with intensity
   const convolver = off.createConvolver();
   convolver.buffer = makeImpulse(off, 0.4, 2.2);
-  const wet = off.createGain(); wet.gain.value = 0.45;
+  const wet = off.createGain(); wet.gain.value = 0.45 * k;
   convolver.connect(wet); wet.connect(master);
 
-  // ── Foreground voice (kept dominant) + pitch warble ──
+  // ── Foreground voice (always dominant) + pitch warble (scaled) ──
   const voice = off.createBufferSource();
   voice.buffer = decoded;
   const voiceGain = off.createGain(); voiceGain.gain.value = 1.0;
   voice.connect(voiceGain);
   voiceGain.connect(master);
-  voiceGain.connect(convolver);
+  if (k > 0) voiceGain.connect(convolver);
 
-  // Warble: two LFOs modulating detune (±~70 cents, wandering) — disrupts the
-  // acoustic features ASR relies on, humans tolerate it as slight wobble.
-  const lfo1 = off.createOscillator(); lfo1.frequency.value = 6.0;
-  const lfo1g = off.createGain(); lfo1g.gain.value = 55;
-  lfo1.connect(lfo1g); lfo1g.connect(voice.detune);
-  const lfo2 = off.createOscillator(); lfo2.frequency.value = 0.7;
-  const lfo2g = off.createGain(); lfo2g.gain.value = 25;
-  lfo2.connect(lfo2g); lfo2g.connect(voice.detune);
-  lfo1.start(); lfo2.start();
+  if (k > 0) {
+    const lfo1 = off.createOscillator(); lfo1.frequency.value = 6.0;
+    const lfo1g = off.createGain(); lfo1g.gain.value = 55 * k;
+    lfo1.connect(lfo1g); lfo1g.connect(voice.detune);
+    const lfo2 = off.createOscillator(); lfo2.frequency.value = 0.7;
+    const lfo2g = off.createGain(); lfo2g.gain.value = 25 * k;
+    lfo2.connect(lfo2g); lfo2g.connect(voice.detune);
+    lfo1.start(); lfo2.start();
+  }
 
-  // Helper to add a competing-speech layer with delay/pitch/tremolo
+  // Competing-speech layer with delay/pitch/tremolo — gain scaled by k
   const addLayer = (
     bufSource: AudioBuffer, rate: number, detune: number, delaySec: number,
-    gainVal: number, tremHz: number
+    baseGain: number, tremHz: number
   ) => {
+    const gainVal = baseGain * k;
+    if (gainVal < 0.001) return;
     const s = off.createBufferSource();
     s.buffer = bufSource;
     s.playbackRate.value = rate;
     s.detune.value = detune;
     const g = off.createGain(); g.gain.value = gainVal;
-    // tremolo
     const trem = off.createOscillator(); trem.frequency.value = tremHz;
     const tremG = off.createGain(); tremG.gain.value = gainVal * 0.5;
     trem.connect(tremG); tremG.connect(g.gain);
@@ -158,34 +176,82 @@ async function buildProtectedAudio(file: File): Promise<AudioBuffer | null> {
     s.start();
   };
 
-  const reversed = reverseBuffer(off, decoded);
+  if (k > 0) {
+    const reversed = reverseBuffer(off, decoded);
+    addLayer(decoded, 0.94, -350, 0.20, 0.55, 17);
+    addLayer(reversed, 1.08, 250, 0.0, 0.5, 23);
+    addLayer(decoded, 1.05, 420, 0.45, 0.42, 13);
+    addLayer(reversed, 0.9, -180, 0.32, 0.4, 29);
 
-  // Competing layer A: pitched-down, slightly slower, delayed
-  addLayer(decoded, 0.94, -350, 0.20, 0.55, 17);
-  // Competing layer B: reversed babble, pitched up
-  addLayer(reversed, 1.08, 250, 0.0, 0.5, 23);
-  // Competing layer C: pitched up, longer delay
-  addLayer(decoded, 1.05, 420, 0.45, 0.42, 13);
-  // Competing layer D: reversed, slower
-  addLayer(reversed, 0.9, -180, 0.32, 0.4, 29);
-
-  // Speech-band noise floor
-  const noise = off.createBufferSource();
-  noise.buffer = makeNoise(off, dur + 1);
-  noise.loop = true;
-  const bp = off.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = 1600; bp.Q.value = 0.7;
-  const ng = off.createGain(); ng.gain.value = 0.09;
-  noise.connect(bp); bp.connect(ng); ng.connect(master);
+    // Speech-band noise floor
+    const noise = off.createBufferSource();
+    noise.buffer = makeNoise(off, dur + 1);
+    noise.loop = true;
+    const bp = off.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = 1600; bp.Q.value = 0.7;
+    const ng = off.createGain(); ng.gain.value = 0.09 * k;
+    noise.connect(bp); bp.connect(ng); ng.connect(master);
+    noise.start();
+  }
 
   voice.start();
-  noise.start();
-
   return off.startRendering();
+}
+
+async function buildProtectedAudio(file: File, intensity: number): Promise<AudioBuffer | null> {
+  const decoded = await decodeFile(file);
+  if (!decoded) return null;
+  return renderProtected(decoded, intensity);
+}
+
+// Encode an AudioBuffer to a 16-bit PCM WAV Blob (for <audio> preview).
+function audioBufferToWav(buf: AudioBuffer): Blob {
+  const numCh = Math.min(buf.numberOfChannels, 2);
+  const sr = buf.sampleRate;
+  const n = buf.length;
+  const bytesPerSample = 2;
+  const blockAlign = numCh * bytesPerSample;
+  const dataSize = n * blockAlign;
+  const ab = new ArrayBuffer(44 + dataSize);
+  const dv = new DataView(ab);
+  const ws = (o: number, s: string) => { for (let i = 0; i < s.length; i++) dv.setUint8(o + i, s.charCodeAt(i)); };
+  ws(0, "RIFF"); dv.setUint32(4, 36 + dataSize, true); ws(8, "WAVE");
+  ws(12, "fmt "); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true);
+  dv.setUint16(22, numCh, true); dv.setUint32(24, sr, true);
+  dv.setUint32(28, sr * blockAlign, true); dv.setUint16(32, blockAlign, true);
+  dv.setUint16(34, 16, true); ws(36, "data"); dv.setUint32(40, dataSize, true);
+  const chans: Float32Array[] = [];
+  for (let c = 0; c < numCh; c++) chans.push(buf.getChannelData(c));
+  let off = 44;
+  for (let i = 0; i < n; i++) {
+    for (let c = 0; c < numCh; c++) {
+      let v = chans[c][i];
+      v = Math.max(-1, Math.min(1, v));
+      dv.setInt16(off, v < 0 ? v * 0x8000 : v * 0x7fff, true);
+      off += 2;
+    }
+  }
+  return new Blob([ab], { type: "audio/wav" });
+}
+
+/**
+ * Renders a short preview (first `seconds`) of the protected audio at the
+ * given intensity (0–100) and returns a playable WAV Blob.
+ */
+export async function previewProtectedAudio(
+  file: File, intensity: number, seconds = 12
+): Promise<Blob | null> {
+  const decoded = await decodeFile(file);
+  if (!decoded) return null;
+  const trimCtx = new OfflineAudioContext(1, 1, decoded.sampleRate);
+  const clip = trimBuffer(trimCtx, decoded, seconds);
+  const rendered = await renderProtected(clip, intensity / 100);
+  return audioBufferToWav(rendered);
 }
 
 // ── Full pipeline: passthrough video + protected audio → MP4 ─────────────────
 export async function protectVideoAudio(opts: AudioProtectOptions): Promise<Blob | null> {
   const { videoFile, onProgress, cancelRef } = opts;
+  const intensity = (opts.intensity ?? 100) / 100;
 
   if (typeof window !== "undefined" && !window.isSecureContext) {
     throw new Error("Acesse o site por HTTPS para processar (WebCodecs exige conexão segura).");
@@ -215,7 +281,7 @@ export async function protectVideoAudio(opts: AudioProtectOptions): Promise<Blob
 
   // Build protected audio first (so muxer can declare a valid audio track)
   onProgress(0.05, "Blindando áudio contra transcrição…");
-  let audioBuf = audioCodecsAvailable() ? await buildProtectedAudio(videoFile) : null;
+  let audioBuf = audioCodecsAvailable() ? await buildProtectedAudio(videoFile, intensity) : null;
   if (audioBuf) {
     try {
       const sup = await AudioEncoder.isConfigSupported({ codec: "mp4a.40.2", sampleRate: OUT_RATE, numberOfChannels: 2, bitrate: 128_000 });

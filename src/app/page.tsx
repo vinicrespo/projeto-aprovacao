@@ -1,16 +1,22 @@
 "use client";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { LoginScreen } from "@/components/LoginScreen";
 import { ExportModal } from "@/components/ExportModal";
 import { downloadBlob } from "@/lib/exporter";
 import { camouflagedFilename } from "@/lib/hashBuster";
 import { processCreative } from "@/lib/creativeProcessor";
-import { protectVideoAudio } from "@/lib/audioProtect";
+import { protectVideoAudio, previewProtectedAudio } from "@/lib/audioProtect";
 
 export default function DashboardPage() {
-  const [authed, setAuthed] = useState(() => {
-    try { return sessionStorage.getItem("fu_auth") === "1"; } catch { return false; }
-  });
+  // Auth is read after mount so server and first client render match (avoids
+  // a hydration mismatch for already-logged-in users).
+  const [authed, setAuthed] = useState(false);
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    try { setAuthed(sessionStorage.getItem("fu_auth") === "1"); } catch { /* ignore */ }
+    setReady(true);
+  }, []);
+  if (!ready) return <div className="min-h-screen bg-surface-950" />;
   if (!authed) return <LoginScreen onAuth={() => setAuthed(true)} />;
   return <App />;
 }
@@ -210,7 +216,25 @@ function AudioProtectTab() {
   const [videos, setVideos] = useState<VideoItem[]>([]);
   const [progress, setProgress] = useState<number | null>(null);
   const [phase, setPhase] = useState("");
+  const [intensity, setIntensity] = useState(60);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewing, setPreviewing] = useState(false);
   const cancelRef = useRef<{ cancelled: boolean }>({ cancelled: false });
+
+  const runPreview = useCallback(async () => {
+    if (videos.length === 0 || previewing) return;
+    setPreviewing(true);
+    try {
+      const blob = await previewProtectedAudio(videos[0].file, intensity, 12);
+      if (!blob) { alert("Este vídeo não tem áudio para pré-visualizar."); return; }
+      setPreviewUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return URL.createObjectURL(blob); });
+    } catch (e) {
+      console.error("Preview falhou:", e);
+      alert("Não foi possível gerar o preview.");
+    } finally {
+      setPreviewing(false);
+    }
+  }, [videos, intensity, previewing]);
 
   const addVideos = useCallback((files: File[]) => {
     const vids = files.filter((f) => f.type.startsWith("video/"));
@@ -245,6 +269,7 @@ function AudioProtectTab() {
       try {
         const blob = await protectVideoAudio({
           videoFile: item.file,
+          intensity,
           onProgress: (r, p) => { setProgress(r); setPhase(`${prefix}${p}`); },
           cancelRef: cancelRef.current,
         });
@@ -266,7 +291,7 @@ function AudioProtectTab() {
     if (failures > 0 && total > 1 && !cancelRef.current.cancelled) {
       alert(`${failures} de ${total} vídeo(s) falharam. Os demais foram baixados.`);
     }
-  }, [videos, progress]);
+  }, [videos, progress, intensity]);
 
   const cancel = useCallback(() => { cancelRef.current.cancelled = true; setProgress(null); }, []);
 
@@ -292,6 +317,47 @@ function AudioProtectTab() {
 
         <StepCard step={1} title={`Vídeos${videos.length ? ` (${videos.length})` : ""}`} done={videos.length > 0}>
           <VideoList videos={videos} onAdd={addVideos} onRemove={removeVideo} disabled={progress !== null} />
+        </StepCard>
+
+        {/* Intensity + preview */}
+        <StepCard step={2} title="Intensidade da blindagem" done={false}>
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm text-white/70">
+              {intensity === 0 ? "Sem proteção" : intensity < 35 ? "Leve" : intensity < 70 ? "Média" : "Forte"}
+            </span>
+            <span className="text-sm font-mono text-brand-400">{intensity}</span>
+          </div>
+          <input
+            type="range" min={0} max={100} step={1} value={intensity}
+            onChange={(e) => setIntensity(parseInt(e.target.value))}
+            disabled={progress !== null}
+            className="w-full accent-brand-500 cursor-pointer disabled:opacity-40"
+          />
+          <div className="flex justify-between text-[10px] text-white/25 mt-1">
+            <span>0 (limpo)</span><span>50</span><span>100 (máximo)</span>
+          </div>
+
+          <div className="mt-4 flex flex-col gap-2">
+            <button
+              onClick={runPreview}
+              disabled={videos.length === 0 || progress !== null || previewing}
+              className="w-full py-2.5 rounded-lg bg-white/10 text-white/80 text-sm font-medium
+                         hover:bg-white/15 disabled:opacity-30 disabled:cursor-not-allowed transition-colors
+                         flex items-center justify-center gap-2"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M15.536 8.464a5 5 0 010 7.072M12 6.253v11.494m0 0L9 15m3 2.747L15 15M6.5 8.5a5 5 0 000 7" />
+              </svg>
+              {previewing ? "Gerando preview…" : "Ouvir preview (12s do 1º vídeo)"}
+            </button>
+            {previewUrl && (
+              <audio src={previewUrl} controls autoPlay className="w-full mt-1" />
+            )}
+            <p className="text-[10px] text-white/25 text-center">
+              Só o áudio muda — o vídeo é mantido. Ajuste o slider e ouça de novo.
+            </p>
+          </div>
         </StepCard>
 
         <button onClick={handleProtect} disabled={!canProcess}
