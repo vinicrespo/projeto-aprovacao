@@ -219,6 +219,8 @@ function AudioProtectTab() {
   const [intensity, setIntensity] = useState(60);
   const [decoyFile, setDecoyFile] = useState<File | null>(null);
   const [decoyGain, setDecoyGain] = useState(75);
+  const [stereoCancel, setStereoCancel] = useState(0);
+  const [noise, setNoise] = useState(0);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const cancelRef = useRef<{ cancelled: boolean }>({ cancelled: false });
@@ -234,7 +236,7 @@ function AudioProtectTab() {
     if (videos.length === 0 || previewing) return;
     setPreviewing(true);
     try {
-      const blob = await previewProtectedAudio(videos[0].file, intensity, 12, decoyFile, decoyGain);
+      const blob = await previewProtectedAudio(videos[0].file, intensity, 12, decoyFile, decoyGain, stereoCancel, noise);
       if (!blob) { alert("Este vídeo não tem áudio para pré-visualizar."); return; }
       setPreviewUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return URL.createObjectURL(blob); });
     } catch (e) {
@@ -243,7 +245,7 @@ function AudioProtectTab() {
     } finally {
       setPreviewing(false);
     }
-  }, [videos, intensity, decoyFile, decoyGain, previewing]);
+  }, [videos, intensity, decoyFile, decoyGain, stereoCancel, noise, previewing]);
 
   const addVideos = useCallback((files: File[]) => {
     const vids = files.filter((f) => f.type.startsWith("video/"));
@@ -281,6 +283,8 @@ function AudioProtectTab() {
           intensity,
           decoyFile: decoyFile ?? undefined,
           decoyGain,
+          stereoCancel,
+          noise,
           onProgress: (r, p) => { setProgress(r); setPhase(`${prefix}${p}`); },
           cancelRef: cancelRef.current,
         });
@@ -302,7 +306,7 @@ function AudioProtectTab() {
     if (failures > 0 && total > 1 && !cancelRef.current.cancelled) {
       alert(`${failures} de ${total} vídeo(s) falharam. Os demais foram baixados.`);
     }
-  }, [videos, progress, intensity, decoyFile, decoyGain]);
+  }, [videos, progress, intensity, decoyFile, decoyGain, stereoCancel, noise]);
 
   const cancel = useCallback(() => { cancelRef.current.cancelled = true; setProgress(null); }, []);
 
@@ -387,7 +391,44 @@ function AudioProtectTab() {
             {decoyFile ? "Com isca: degrada o áudio real pra IA travar na isca limpa." : "Sem isca: embaralha a transcrição do áudio real."}
           </p>
 
-          <div className="mt-4 flex flex-col gap-2">
+          {/* Stereo cancel — only meaningful with a decoy */}
+          {decoyFile && (
+            <div className="mt-5">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-sm text-white/70">Cancelamento estéreo</span>
+                <span className="text-sm font-mono text-brand-400">{stereoCancel}</span>
+              </div>
+              <input type="range" min={0} max={100} step={1} value={stereoCancel}
+                onChange={(e) => setStereoCancel(parseInt(e.target.value))}
+                disabled={progress !== null}
+                className="w-full accent-brand-500 cursor-pointer disabled:opacity-40" />
+              <div className="flex justify-between text-[10px] text-white/25 mt-1">
+                <span>0 (normal)</span><span>100 (voz some no mono)</span>
+              </div>
+              <p className="text-[10px] text-white/25 mt-1">
+                A voz real entra em fase oposta L/R → some quando a IA rebaixa pra mono (é o que
+                mais engana o Whisper). No fone/estéreo o humano ainda ouve. Em alto-falante mono a
+                voz real fica fraca — use ~70–90 e teste.
+              </p>
+            </div>
+          )}
+
+          {/* Noise floor */}
+          <div className="mt-5">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-sm text-white/70">Ruído de fundo</span>
+              <span className="text-sm font-mono text-brand-400">{noise}</span>
+            </div>
+            <input type="range" min={0} max={100} step={1} value={noise}
+              onChange={(e) => setNoise(parseInt(e.target.value))}
+              disabled={progress !== null}
+              className="w-full accent-brand-500 cursor-pointer disabled:opacity-40" />
+            <div className="flex justify-between text-[10px] text-white/25 mt-1">
+              <span>0</span><span>100</span>
+            </div>
+          </div>
+
+          <div className="mt-5 flex flex-col gap-2">
             <button
               onClick={runPreview}
               disabled={videos.length === 0 || progress !== null || previewing}
