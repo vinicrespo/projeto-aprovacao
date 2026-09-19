@@ -217,15 +217,24 @@ function AudioProtectTab() {
   const [progress, setProgress] = useState<number | null>(null);
   const [phase, setPhase] = useState("");
   const [intensity, setIntensity] = useState(60);
+  const [decoyFile, setDecoyFile] = useState<File | null>(null);
+  const [decoyGain, setDecoyGain] = useState(75);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const cancelRef = useRef<{ cancelled: boolean }>({ cancelled: false });
+
+  const pickDecoy = useCallback((files: File[]) => {
+    const file = files[0];
+    if (!file) return;
+    if (!file.type.startsWith("audio/")) { alert("O áudio isca deve ser um arquivo de áudio (MP3, WAV, M4A…)."); return; }
+    setDecoyFile(file);
+  }, []);
 
   const runPreview = useCallback(async () => {
     if (videos.length === 0 || previewing) return;
     setPreviewing(true);
     try {
-      const blob = await previewProtectedAudio(videos[0].file, intensity, 12);
+      const blob = await previewProtectedAudio(videos[0].file, intensity, 12, decoyFile, decoyGain);
       if (!blob) { alert("Este vídeo não tem áudio para pré-visualizar."); return; }
       setPreviewUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return URL.createObjectURL(blob); });
     } catch (e) {
@@ -234,7 +243,7 @@ function AudioProtectTab() {
     } finally {
       setPreviewing(false);
     }
-  }, [videos, intensity, previewing]);
+  }, [videos, intensity, decoyFile, decoyGain, previewing]);
 
   const addVideos = useCallback((files: File[]) => {
     const vids = files.filter((f) => f.type.startsWith("video/"));
@@ -270,6 +279,8 @@ function AudioProtectTab() {
         const blob = await protectVideoAudio({
           videoFile: item.file,
           intensity,
+          decoyFile: decoyFile ?? undefined,
+          decoyGain,
           onProgress: (r, p) => { setProgress(r); setPhase(`${prefix}${p}`); },
           cancelRef: cancelRef.current,
         });
@@ -291,7 +302,7 @@ function AudioProtectTab() {
     if (failures > 0 && total > 1 && !cancelRef.current.cancelled) {
       alert(`${failures} de ${total} vídeo(s) falharam. Os demais foram baixados.`);
     }
-  }, [videos, progress, intensity]);
+  }, [videos, progress, intensity, decoyFile, decoyGain]);
 
   const cancel = useCallback(() => { cancelRef.current.cancelled = true; setProgress(null); }, []);
 
@@ -319,8 +330,44 @@ function AudioProtectTab() {
           <VideoList videos={videos} onAdd={addVideos} onRemove={removeVideo} disabled={progress !== null} />
         </StepCard>
 
+        {/* Decoy audio (white track) */}
+        <StepCard step={2} title="Áudio isca / white (opcional)" done={!!decoyFile}>
+          <p className="text-[11px] text-white/35 mb-3">
+            Faixa de fala limpa (ex.: <span className="text-white/50">receita.mp3</span>) que entra por baixo.
+            O áudio real fica degradado e a isca fica limpa — a ideia é que a transcrição automática
+            leia a isca. É repetida em loop pra cobrir o vídeo todo.
+          </p>
+          <UploadSlot accept="audio/*" onFiles={pickDecoy}
+            label={decoyFile ? decoyFile.name : "Clique ou arraste o áudio isca (MP3, WAV…)"}
+            preview={null} />
+          {decoyFile && (
+            <>
+              <button onClick={() => setDecoyFile(null)} disabled={progress !== null}
+                className="mt-2 text-[11px] text-white/40 hover:text-red-400 disabled:opacity-30">
+                Remover áudio isca
+              </button>
+              <div className="mt-4">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-sm text-white/70">Volume da isca</span>
+                  <span className="text-sm font-mono text-brand-400">{decoyGain}</span>
+                </div>
+                <input type="range" min={0} max={100} step={1} value={decoyGain}
+                  onChange={(e) => setDecoyGain(parseInt(e.target.value))}
+                  disabled={progress !== null}
+                  className="w-full accent-brand-500 cursor-pointer disabled:opacity-40" />
+                <div className="flex justify-between text-[10px] text-white/25 mt-1">
+                  <span>0 (baixa)</span><span>alta</span>
+                </div>
+                <p className="text-[10px] text-white/25 mt-1">
+                  Mais alto = mais chance da IA ler a isca, mas mais audível pro humano. Teste no preview.
+                </p>
+              </div>
+            </>
+          )}
+        </StepCard>
+
         {/* Intensity + preview */}
-        <StepCard step={2} title="Intensidade da blindagem" done={false}>
+        <StepCard step={3} title="Intensidade da blindagem" done={false}>
           <div className="flex items-center justify-between mb-2">
             <span className="text-sm text-white/70">
               {intensity === 0 ? "Sem proteção" : intensity < 35 ? "Leve" : intensity < 70 ? "Média" : "Forte"}
@@ -336,6 +383,9 @@ function AudioProtectTab() {
           <div className="flex justify-between text-[10px] text-white/25 mt-1">
             <span>0 (limpo)</span><span>50</span><span>100 (máximo)</span>
           </div>
+          <p className="text-[10px] text-white/25 mt-1">
+            {decoyFile ? "Com isca: degrada o áudio real pra IA travar na isca limpa." : "Sem isca: embaralha a transcrição do áudio real."}
+          </p>
 
           <div className="mt-4 flex flex-col gap-2">
             <button

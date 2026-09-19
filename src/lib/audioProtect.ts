@@ -2,7 +2,9 @@ import { cleanMp4Metadata } from "@/lib/mp4Metadata";
 
 export interface AudioProtectOptions {
   videoFile: File;
-  intensity?: number; // 0–100 (default 100); scales all obfuscation layers
+  intensity?: number;   // 0–100 (default 100); degradation of the real voice
+  decoyFile?: File;     // optional "white" audio laid underneath (clean)
+  decoyGain?: number;   // 0–100 (default 75); how loud the decoy sits
   onProgress: (ratio: number, phase: string) => void;
   cancelRef: { cancelled: boolean };
 }
@@ -109,13 +111,27 @@ function trimBuffer(ctx: BaseAudioContext, decoded: AudioBuffer, seconds: number
   return out;
 }
 
+interface RenderOpts {
+  intensity: number;              // 0–1 — degradation applied to the REAL voice
+  decoy?: AudioBuffer | null;     // clean "white" track laid underneath
+  decoyGain?: number;             // 0–1 — how loud the decoy sits (default 0.75)
+}
+
 /**
- * Renders the obfuscated audio from a decoded buffer at 48000 Hz.
- * `intensity` (0–1) scales every obfuscation layer: 0 = clean voice only,
- * 1 = full aggressive blindagem.
+ * Renders the protected audio at 48000 Hz.
+ *
+ * Without a decoy: layered obfuscation (competing/reversed babble + warble +
+ * reverb + noise) that garbles automatic transcription.
+ *
+ * With a decoy ("white" track): the REAL voice is degraded (pitch warble +
+ * light reverb, kept audible for humans) while the decoy is mixed in CLEAN.
+ * The bet: the transcriber locks onto the only clean, intelligible speech —
+ * the decoy — instead of the garbled real content.
  */
-async function renderProtected(decoded: AudioBuffer, intensity: number): Promise<AudioBuffer> {
-  const k = Math.max(0, Math.min(1, intensity));
+async function renderProtected(decoded: AudioBuffer, opts: RenderOpts): Promise<AudioBuffer> {
+  const k = Math.max(0, Math.min(1, opts.intensity));
+  const decoy = opts.decoy ?? null;
+  const decoyGain = Math.max(0, Math.min(1, opts.decoyGain ?? 0.75));
   const dur = decoded.duration;
   const len = Math.max(1, Math.ceil(dur * OUT_RATE));
   const off = new OfflineAudioContext(2, len, OUT_RATE);
@@ -131,7 +147,7 @@ async function renderProtected(decoded: AudioBuffer, intensity: number): Promise
   const wet = off.createGain(); wet.gain.value = 0.45 * k;
   convolver.connect(wet); wet.connect(master);
 
-  // ── Foreground voice (always dominant) + pitch warble (scaled) ──
+  // ── Real voice (dominant for humans) + pitch warble (scaled) ──
   const voice = off.createBufferSource();
   voice.buffer = decoded;
   const voiceGain = off.createGain(); voiceGain.gain.value = 1.0;
@@ -147,6 +163,16 @@ async function renderProtected(decoded: AudioBuffer, intensity: number): Promise
     const lfo2g = off.createGain(); lfo2g.gain.value = 25 * k;
     lfo2.connect(lfo2g); lfo2g.connect(voice.detune);
     lfo1.start(); lfo2.start();
+  }
+
+  // ── Decoy "white" track — CLEAN, looped to fill the whole duration ──
+  if (decoy) {
+    const dsrc = off.createBufferSource();
+    dsrc.buffer = decoy;
+    dsrc.loop = true;
+    const dg = off.createGain(); dg.gain.value = decoyGain;
+    dsrc.connect(dg); dg.connect(master); // no warble/reverb → stays intelligible
+    dsrc.start();
   }
 
   // Competing-speech layer with delay/pitch/tremolo — gain scaled by k
@@ -176,14 +202,15 @@ async function renderProtected(decoded: AudioBuffer, intensity: number): Promise
     s.start();
   };
 
-  if (k > 0) {
+  // Reversed/competing babble would also garble the decoy, so we ONLY add it
+  // when there's no decoy. With a decoy, the decoy itself is the "confuser".
+  if (k > 0 && !decoy) {
     const reversed = reverseBuffer(off, decoded);
     addLayer(decoded, 0.94, -350, 0.20, 0.55, 17);
     addLayer(reversed, 1.08, 250, 0.0, 0.5, 23);
     addLayer(decoded, 1.05, 420, 0.45, 0.42, 13);
     addLayer(reversed, 0.9, -180, 0.32, 0.4, 29);
 
-    // Speech-band noise floor
     const noise = off.createBufferSource();
     noise.buffer = makeNoise(off, dur + 1);
     noise.loop = true;
@@ -197,10 +224,12 @@ async function renderProtected(decoded: AudioBuffer, intensity: number): Promise
   return off.startRendering();
 }
 
-async function buildProtectedAudio(file: File, intensity: number): Promise<AudioBuffer | null> {
+async function buildProtectedAudio(
+  file: File, intensity: number, decoy: AudioBuffer | null, decoyGain: number
+): Promise<AudioBuffer | null> {
   const decoded = await decodeFile(file);
   if (!decoded) return null;
-  return renderProtected(decoded, intensity);
+  return renderProtected(decoded, { intensity, decoy, decoyGain });
 }
 
 // Encode an AudioBuffer to a 16-bit PCM WAV Blob (for <audio> preview).
@@ -238,13 +267,15 @@ function audioBufferToWav(buf: AudioBuffer): Blob {
  * given intensity (0–100) and returns a playable WAV Blob.
  */
 export async function previewProtectedAudio(
-  file: File, intensity: number, seconds = 12
+  file: File, intensity: number, seconds = 12,
+  decoyFile?: File | null, decoyGain = 75
 ): Promise<Blob | null> {
   const decoded = await decodeFile(file);
   if (!decoded) return null;
   const trimCtx = new OfflineAudioContext(1, 1, decoded.sampleRate);
   const clip = trimBuffer(trimCtx, decoded, seconds);
-  const rendered = await renderProtected(clip, intensity / 100);
+  const decoy = decoyFile ? await decodeFile(decoyFile) : null;
+  const rendered = await renderProtected(clip, { intensity: intensity / 100, decoy, decoyGain: decoyGain / 100 });
   return audioBufferToWav(rendered);
 }
 
@@ -252,6 +283,7 @@ export async function previewProtectedAudio(
 export async function protectVideoAudio(opts: AudioProtectOptions): Promise<Blob | null> {
   const { videoFile, onProgress, cancelRef } = opts;
   const intensity = (opts.intensity ?? 100) / 100;
+  const decoyGain = (opts.decoyGain ?? 75) / 100;
 
   if (typeof window !== "undefined" && !window.isSecureContext) {
     throw new Error("Acesse o site por HTTPS para processar (WebCodecs exige conexão segura).");
@@ -281,7 +313,8 @@ export async function protectVideoAudio(opts: AudioProtectOptions): Promise<Blob
 
   // Build protected audio first (so muxer can declare a valid audio track)
   onProgress(0.05, "Blindando áudio contra transcrição…");
-  let audioBuf = audioCodecsAvailable() ? await buildProtectedAudio(videoFile, intensity) : null;
+  const decoy = (opts.decoyFile && audioCodecsAvailable()) ? await decodeFile(opts.decoyFile) : null;
+  let audioBuf = audioCodecsAvailable() ? await buildProtectedAudio(videoFile, intensity, decoy, decoyGain) : null;
   if (audioBuf) {
     try {
       const sup = await AudioEncoder.isConfigSupported({ codec: "mp4a.40.2", sampleRate: OUT_RATE, numberOfChannels: 2, bitrate: 128_000 });
