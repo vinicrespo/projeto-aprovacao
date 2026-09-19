@@ -5,6 +5,7 @@ import { ExportModal } from "@/components/ExportModal";
 import { downloadBlob } from "@/lib/exporter";
 import { camouflagedFilename } from "@/lib/hashBuster";
 import { processCreative } from "@/lib/creativeProcessor";
+import { protectVideoAudio } from "@/lib/audioProtect";
 
 export default function DashboardPage() {
   const [authed, setAuthed] = useState(() => {
@@ -15,8 +16,55 @@ export default function DashboardPage() {
 }
 
 interface VideoItem { id: string; file: File; url: string; }
+type Tab = "criativo" | "audio";
 
 function App() {
+  const [tab, setTab] = useState<Tab>("criativo");
+  return (
+    <div className="min-h-screen flex flex-col">
+      {/* Header */}
+      <header className="border-b border-white/5 px-6 py-4 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-lg bg-brand-500 flex items-center justify-center">
+            <span className="text-white font-bold text-sm">F</span>
+          </div>
+          <div>
+            <h1 className="text-sm font-semibold text-white">Face Unds</h1>
+            <p className="text-[10px] text-white/30 font-mono">Digital Asset Standardization Engine</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] px-2 py-1 rounded-full bg-emerald-500/10 text-emerald-400 font-mono">● 100% Client-Side</span>
+          <span className="text-[10px] px-2 py-1 rounded-full bg-white/5 text-white/30 font-mono">GDPR Compliant</span>
+        </div>
+      </header>
+
+      {/* Tab bar */}
+      <div className="border-b border-white/5 px-6 flex gap-1">
+        <TabButton active={tab === "criativo"} onClick={() => setTab("criativo")} label="Criativo" />
+        <TabButton active={tab === "audio"} onClick={() => setTab("audio")} label="Proteção de Áudio" />
+      </div>
+
+      {tab === "criativo" ? <CreativeTab /> : <AudioProtectTab />}
+    </div>
+  );
+}
+
+function TabButton({ active, onClick, label }: { active: boolean; onClick: () => void; label: string }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`px-4 py-3 text-sm font-medium border-b-2 -mb-px transition-colors ${
+        active ? "border-brand-500 text-white" : "border-transparent text-white/40 hover:text-white/70"
+      }`}
+    >
+      {label}
+    </button>
+  );
+}
+
+// ── Tab 1: Criativo (cover + video + 5-min tail) ─────────────────────────────
+function CreativeTab() {
   const [coverFile, setCoverFile] = useState<File | null>(null);
   const [coverUrl, setCoverUrl] = useState<string | null>(null);
   const [endCoverFile, setEndCoverFile] = useState<File | null>(null);
@@ -72,7 +120,6 @@ function App() {
     cancelRef.current = { cancelled: false };
     const total = videos.length;
     let failures = 0;
-
     for (let i = 0; i < total; i++) {
       if (cancelRef.current.cancelled) break;
       const item = videos[i];
@@ -89,7 +136,6 @@ function App() {
         });
         if (blob && !cancelRef.current.cancelled) {
           downloadBlob(blob, camouflagedFilename());
-          // brief spacing so the browser accepts back-to-back downloads
           await new Promise((res) => setTimeout(res, 800));
         }
       } catch (e) {
@@ -97,7 +143,6 @@ function App() {
         failures++;
       }
     }
-
     setProgress(null);
     setPhase("");
     if (failures > 0 && !cancelRef.current.cancelled) {
@@ -108,119 +153,187 @@ function App() {
   const cancel = useCallback(() => { cancelRef.current.cancelled = true; setProgress(null); }, []);
 
   return (
-    <div className="min-h-screen flex flex-col">
-      {progress !== null && (
-        <ExportModal progress={progress} done={false} onCancel={cancel} phaseLabel={phase} />
-      )}
-
-      {/* Header */}
-      <header className="border-b border-white/5 px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-brand-500 flex items-center justify-center">
-            <span className="text-white font-bold text-sm">F</span>
-          </div>
-          <div>
-            <h1 className="text-sm font-semibold text-white">Face Unds</h1>
-            <p className="text-[10px] text-white/30 font-mono">Digital Asset Standardization Engine</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] px-2 py-1 rounded-full bg-emerald-500/10 text-emerald-400 font-mono">● 100% Client-Side</span>
-          <span className="text-[10px] px-2 py-1 rounded-full bg-white/5 text-white/30 font-mono">GDPR Compliant</span>
-        </div>
-      </header>
-
-      <main className="flex-1 flex items-start justify-center p-6 overflow-y-auto">
-        <div className="w-full max-w-2xl flex flex-col gap-6 mt-4">
-          <div className="text-center">
-            <h2 className="text-lg font-semibold text-white">Processar Criativos</h2>
-            <p className="text-sm text-white/40 mt-1">
-              Suba a capa (CTA) e um ou mais vídeos. Cada vídeo é processado e baixado individualmente.
-            </p>
-          </div>
-
-          {/* Step 1 — Cover (intro) */}
-          <StepCard step={1} title="Capa inicial (abertura)" done={!!coverFile}>
-            <UploadSlot
-              accept="image/*"
-              onFiles={pickCover}
-              label={coverFile ? coverFile.name : "Clique ou arraste a imagem de abertura"}
-              preview={coverUrl ? <img src={coverUrl} alt="capa" className="h-full w-full object-cover" /> : null}
-              tall
-            />
-          </StepCard>
-
-          {/* Step 2 — End image (optional) */}
-          <StepCard step={2} title="Imagem final (opcional)" done={!!endCoverFile}>
-            <p className="text-[11px] text-white/35 mb-3">
-              Imagem que fica nos 5 minutos após o vídeo. Se não enviar, usa a capa inicial.
-            </p>
-            <UploadSlot
-              accept="image/*"
-              onFiles={pickEndCover}
-              label={endCoverFile ? endCoverFile.name : "Clique ou arraste a imagem final (opcional)"}
-              preview={endCoverUrl ? <img src={endCoverUrl} alt="imagem final" className="h-full w-full object-cover" /> : null}
-              tall
-            />
-            {endCoverFile && (
-              <button onClick={clearEndCover} disabled={progress !== null}
-                className="mt-2 text-[11px] text-white/40 hover:text-red-400 disabled:opacity-30">
-                Remover imagem final (usar a capa inicial)
-              </button>
-            )}
-          </StepCard>
-
-          {/* Step 3 — Videos (multiple) */}
-          <StepCard step={3} title={`Vídeos${videos.length ? ` (${videos.length})` : ""}`} done={videos.length > 0}>
-            <div className="flex flex-col gap-3">
-              <UploadSlot
-                accept="video/*"
-                multiple
-                onFiles={addVideos}
-                label={videos.length ? "Adicionar mais vídeos" : "Clique ou arraste um ou mais vídeos"}
-                preview={null}
-              />
-              {videos.length > 0 && (
-                <div className="flex flex-col gap-2">
-                  {videos.map((v, i) => (
-                    <div key={v.id} className="flex items-center gap-3 rounded-lg bg-white/5 border border-white/8 p-2">
-                      <video src={v.url} muted className="w-14 h-14 rounded object-cover bg-black" />
-                      <span className="flex-1 text-xs text-white/70 truncate">{i + 1}. {v.file.name}</span>
-                      <button
-                        onClick={() => removeVideo(v.id)}
-                        disabled={progress !== null}
-                        className="text-white/30 hover:text-red-400 disabled:opacity-30 text-lg px-2 leading-none"
-                        title="Remover"
-                      >
-                        ✕
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </StepCard>
-
-          {/* Step 3 — Process */}
-          <button
-            onClick={handleProcess}
-            disabled={!canProcess}
-            className="w-full py-4 rounded-xl bg-brand-500 text-white font-semibold text-base
-                       hover:bg-brand-600 disabled:opacity-30 disabled:cursor-not-allowed
-                       transition-colors flex items-center justify-center gap-2"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                d="M13 10V3L4 14h7v7l9-11h-7z" />
-            </svg>
-            {videos.length > 1 ? `Processar ${videos.length} vídeos` : "Processar"}
-          </button>
-
-          <p className="text-center text-[11px] text-white/25">
-            Abertura 1s · vídeo com efeitos · capa segurada por 5 min no final · exporta MP4
+    <main className="flex-1 flex items-start justify-center p-6 overflow-y-auto">
+      {progress !== null && <ExportModal progress={progress} done={false} onCancel={cancel} phaseLabel={phase} />}
+      <div className="w-full max-w-2xl flex flex-col gap-6 mt-4">
+        <div className="text-center">
+          <h2 className="text-lg font-semibold text-white">Processar Criativos</h2>
+          <p className="text-sm text-white/40 mt-1">
+            Suba a capa (CTA) e um ou mais vídeos. Cada vídeo é processado e baixado individualmente.
           </p>
         </div>
-      </main>
+
+        <StepCard step={1} title="Capa inicial (abertura)" done={!!coverFile}>
+          <UploadSlot accept="image/*" onFiles={pickCover}
+            label={coverFile ? coverFile.name : "Clique ou arraste a imagem de abertura"}
+            preview={coverUrl ? <img src={coverUrl} alt="capa" className="h-full w-full object-cover" /> : null} tall />
+        </StepCard>
+
+        <StepCard step={2} title="Imagem final (opcional)" done={!!endCoverFile}>
+          <p className="text-[11px] text-white/35 mb-3">
+            Imagem que fica nos 5 minutos após o vídeo. Se não enviar, usa a capa inicial.
+          </p>
+          <UploadSlot accept="image/*" onFiles={pickEndCover}
+            label={endCoverFile ? endCoverFile.name : "Clique ou arraste a imagem final (opcional)"}
+            preview={endCoverUrl ? <img src={endCoverUrl} alt="imagem final" className="h-full w-full object-cover" /> : null} tall />
+          {endCoverFile && (
+            <button onClick={clearEndCover} disabled={progress !== null}
+              className="mt-2 text-[11px] text-white/40 hover:text-red-400 disabled:opacity-30">
+              Remover imagem final (usar a capa inicial)
+            </button>
+          )}
+        </StepCard>
+
+        <StepCard step={3} title={`Vídeos${videos.length ? ` (${videos.length})` : ""}`} done={videos.length > 0}>
+          <VideoList videos={videos} onAdd={addVideos} onRemove={removeVideo} disabled={progress !== null} />
+        </StepCard>
+
+        <button onClick={handleProcess} disabled={!canProcess}
+          className="w-full py-4 rounded-xl bg-brand-500 text-white font-semibold text-base
+                     hover:bg-brand-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2">
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+          </svg>
+          {videos.length > 1 ? `Processar ${videos.length} vídeos` : "Processar"}
+        </button>
+
+        <p className="text-center text-[11px] text-white/25">
+          Abertura 1s · vídeo com efeitos · capa segurada por 5 min no final · exporta MP4
+        </p>
+      </div>
+    </main>
+  );
+}
+
+// ── Tab 2: Proteção de Áudio (anti-transcription) ────────────────────────────
+function AudioProtectTab() {
+  const [videos, setVideos] = useState<VideoItem[]>([]);
+  const [progress, setProgress] = useState<number | null>(null);
+  const [phase, setPhase] = useState("");
+  const cancelRef = useRef<{ cancelled: boolean }>({ cancelled: false });
+
+  const addVideos = useCallback((files: File[]) => {
+    const vids = files.filter((f) => f.type.startsWith("video/"));
+    if (vids.length === 0) { alert("Envie vídeos (MP4, MOV…)."); return; }
+    setVideos((prev) => [
+      ...prev,
+      ...vids.map((file) => ({ id: `${file.name}-${file.size}-${Math.random().toString(36).slice(2, 8)}`, file, url: URL.createObjectURL(file) })),
+    ]);
+  }, []);
+
+  const removeVideo = useCallback((id: string) => {
+    setVideos((prev) => {
+      const v = prev.find((x) => x.id === id);
+      if (v) URL.revokeObjectURL(v.url);
+      return prev.filter((x) => x.id !== id);
+    });
+  }, []);
+
+  const canProcess = videos.length > 0 && progress === null;
+
+  const handleProtect = useCallback(async () => {
+    if (videos.length === 0 || progress !== null) return;
+    cancelRef.current = { cancelled: false };
+    const total = videos.length;
+    let failures = 0;
+    for (let i = 0; i < total; i++) {
+      if (cancelRef.current.cancelled) break;
+      const item = videos[i];
+      const prefix = total > 1 ? `Vídeo ${i + 1}/${total} · ` : "";
+      setProgress(0);
+      setPhase(`${prefix}Iniciando…`);
+      try {
+        const blob = await protectVideoAudio({
+          videoFile: item.file,
+          onProgress: (r, p) => { setProgress(r); setPhase(`${prefix}${p}`); },
+          cancelRef: cancelRef.current,
+        });
+        if (blob && !cancelRef.current.cancelled) {
+          downloadBlob(blob, camouflagedFilename());
+          await new Promise((res) => setTimeout(res, 800));
+        }
+      } catch (e) {
+        console.error(`Falha no vídeo ${i + 1}:`, e);
+        failures++;
+        if (total === 1) {
+          const msg = e instanceof Error && e.message ? e.message : "Falha ao proteger o áudio.";
+          alert(msg);
+        }
+      }
+    }
+    setProgress(null);
+    setPhase("");
+    if (failures > 0 && total > 1 && !cancelRef.current.cancelled) {
+      alert(`${failures} de ${total} vídeo(s) falharam. Os demais foram baixados.`);
+    }
+  }, [videos, progress]);
+
+  const cancel = useCallback(() => { cancelRef.current.cancelled = true; setProgress(null); }, []);
+
+  return (
+    <main className="flex-1 flex items-start justify-center p-6 overflow-y-auto">
+      {progress !== null && <ExportModal progress={progress} done={false} onCancel={cancel} phaseLabel={phase} />}
+      <div className="w-full max-w-2xl flex flex-col gap-6 mt-4">
+        <div className="text-center">
+          <h2 className="text-lg font-semibold text-white">Proteção de Áudio</h2>
+          <p className="text-sm text-white/40 mt-1">
+            Blindagem anti-transcrição extremamente agressiva. O vídeo é mantido; o áudio permanece
+            audível para humanos, mas a transcrição automática (robôs) sai embaralhada.
+          </p>
+        </div>
+
+        <div className="rounded-xl bg-amber-500/10 border border-amber-500/20 p-3">
+          <p className="text-[11px] text-amber-300/80 leading-relaxed">
+            ⚠️ Modo agressivo: o áudio soa "processado" (camadas concorrentes, warble e reverb).
+            Degrada fortemente transcritores automáticos, mas não força um texto específico — a eficácia
+            varia por sistema.
+          </p>
+        </div>
+
+        <StepCard step={1} title={`Vídeos${videos.length ? ` (${videos.length})` : ""}`} done={videos.length > 0}>
+          <VideoList videos={videos} onAdd={addVideos} onRemove={removeVideo} disabled={progress !== null} />
+        </StepCard>
+
+        <button onClick={handleProtect} disabled={!canProcess}
+          className="w-full py-4 rounded-xl bg-brand-500 text-white font-semibold text-base
+                     hover:bg-brand-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2">
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+              d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+          </svg>
+          {videos.length > 1 ? `Blindar ${videos.length} vídeos` : "Blindar áudio"}
+        </button>
+
+        <p className="text-center text-[11px] text-white/25">
+          Só áudio · vídeo mantido · exporta MP4 · metadados limpos
+        </p>
+      </div>
+    </main>
+  );
+}
+
+// ── Shared UI ────────────────────────────────────────────────────────────────
+function VideoList({ videos, onAdd, onRemove, disabled }: {
+  videos: VideoItem[]; onAdd: (f: File[]) => void; onRemove: (id: string) => void; disabled: boolean;
+}) {
+  return (
+    <div className="flex flex-col gap-3">
+      <UploadSlot accept="video/*" multiple onFiles={onAdd}
+        label={videos.length ? "Adicionar mais vídeos" : "Clique ou arraste um ou mais vídeos"} preview={null} />
+      {videos.length > 0 && (
+        <div className="flex flex-col gap-2">
+          {videos.map((v, i) => (
+            <div key={v.id} className="flex items-center gap-3 rounded-lg bg-white/5 border border-white/8 p-2">
+              <video src={v.url} muted className="w-14 h-14 rounded object-cover bg-black" />
+              <span className="flex-1 text-xs text-white/70 truncate">{i + 1}. {v.file.name}</span>
+              <button onClick={() => onRemove(v.id)} disabled={disabled}
+                className="text-white/30 hover:text-red-400 disabled:opacity-30 text-lg px-2 leading-none" title="Remover">
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
