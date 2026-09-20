@@ -76,6 +76,7 @@ function CreativeTab() {
   const [endCoverFile, setEndCoverFile] = useState<File | null>(null);
   const [endCoverUrl, setEndCoverUrl] = useState<string | null>(null);
   const [videos, setVideos] = useState<VideoItem[]>([]);
+  const [protectionLevel, setProtectionLevel] = useState(100);
 
   const [progress, setProgress] = useState<number | null>(null);
   const [phase, setPhase] = useState("");
@@ -136,6 +137,7 @@ function CreativeTab() {
         const blob = await processCreative({
           coverFile,
           endCoverFile: endCoverFile ?? undefined,
+          protectionLevel,
           videoFile: item.file,
           onProgress: (r, p) => { setProgress(r); setPhase(`${prefix}${p}`); },
           cancelRef: cancelRef.current,
@@ -154,7 +156,7 @@ function CreativeTab() {
     if (failures > 0 && !cancelRef.current.cancelled) {
       alert(`${failures} de ${total} vídeo(s) falharam. Os demais foram baixados.`);
     }
-  }, [coverFile, endCoverFile, videos, progress]);
+  }, [coverFile, endCoverFile, protectionLevel, videos, progress]);
 
   const cancel = useCallback(() => { cancelRef.current.cancelled = true; setProgress(null); }, []);
 
@@ -192,6 +194,26 @@ function CreativeTab() {
 
         <StepCard step={3} title={`Vídeos${videos.length ? ` (${videos.length})` : ""}`} done={videos.length > 0}>
           <VideoList videos={videos} onAdd={addVideos} onRemove={removeVideo} disabled={progress !== null} />
+        </StepCard>
+
+        <StepCard step={4} title="Intensidade da proteção" done={false}>
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm text-white/70">
+              {protectionLevel === 0 ? "Desligada (só troca hash)" : protectionLevel < 35 ? "Leve" : protectionLevel < 70 ? "Média" : "Forte"}
+            </span>
+            <span className="text-sm font-mono text-brand-400">{protectionLevel}</span>
+          </div>
+          <input type="range" min={0} max={100} step={1} value={protectionLevel}
+            onChange={(e) => setProtectionLevel(parseInt(e.target.value))}
+            disabled={progress !== null}
+            className="w-full accent-brand-500 cursor-pointer disabled:opacity-40" />
+          <div className="flex justify-between text-[10px] text-white/25 mt-1">
+            <span>0 (limpo)</span><span>50</span><span>100 (máximo)</span>
+          </div>
+          <p className="text-[10px] text-white/25 mt-2">
+            Controla todos os efeitos de uma vez: cor/contraste, correção cromática, pisca, grão e
+            pixelado. Em 0, o vídeo fica visualmente igual ao original (só o hash é trocado).
+          </p>
         </StepCard>
 
         <button onClick={handleProcess} disabled={!canProcess}

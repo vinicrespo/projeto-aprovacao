@@ -5,6 +5,7 @@ export interface CreativeOptions {
   coverFile: File;              // shown at the start (intro)
   videoFile: File;
   endCoverFile?: File;          // shown for the 5-min tail; falls back to coverFile
+  protectionLevel?: number;     // 0–100 (default 100); scales all visual effects
   onProgress: (ratio: number, phase: string) => void;
   cancelRef: { cancelled: boolean };
   introSeconds?: number;  // override for testing; defaults to INTRO_SECONDS
@@ -206,24 +207,29 @@ export async function processCreative(opts: CreativeOptions): Promise<Blob | nul
   const uHash       = loc("u_hash_seed");
   const uPixel      = loc("u_crackle_intensity");
   const uFlash      = loc("u_flash");
+  const uProtection = loc("u_protection");
   const uTime       = loc("u_time");
   const uTexture    = loc("u_texture");
   const uPrev       = loc("u_prev_texture");
+
+  // Global protection level (0–1) scales every visual effect
+  const kProt = Math.max(0, Math.min(1, (opts.protectionLevel ?? 100) / 100));
 
   const renderVideoFrame = (mediaTime: number) => {
     uploadVideoTexture(gl, tex, video);
     gl.useProgram(program);
     gl.bindVertexArray(vao);
-    gl.uniform1f(uContrast,  PRESET.contrast);
-    gl.uniform1f(uChromatic, PRESET.chromatic);
+    gl.uniform1f(uContrast,  PRESET.contrast * kProt);
+    gl.uniform1f(uChromatic, PRESET.chromatic * kProt);
     gl.uniform1f(uMotion,    0);
-    gl.uniform1f(uNoiseDens, PRESET.noise);
-    gl.uniform1f(uNoiseOn,   1);
+    gl.uniform1f(uNoiseDens, PRESET.noise * kProt);
+    gl.uniform1f(uNoiseOn,   kProt > 0 ? 1 : 0);
     gl.uniform1f(uFlipV,     0);
     gl.uniform1f(uFlipH,     0);
     gl.uniform1f(uHash,      hashSeed);
-    gl.uniform1f(uPixel,     PRESET.pixelation);
-    gl.uniform1f(uFlash,     PRESET.flash);
+    gl.uniform1f(uPixel,     PRESET.pixelation * kProt);
+    gl.uniform1f(uFlash,     PRESET.flash > 0 && kProt > 0 ? 1 : 0);
+    gl.uniform1f(uProtection, kProt);
     gl.uniform1f(uTime,      mediaTime);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, tex);

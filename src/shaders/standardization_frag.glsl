@@ -14,6 +14,7 @@ uniform float u_flip_h;
 uniform float u_hash_seed;
 uniform float u_crackle_intensity; // pixelation: 0 = off, 1 = max
 uniform float u_flash;             // screen flicker/flash intensity: 0 = off, 1 = strong
+uniform float u_protection;        // global protection level 0..1 (scales exposure + flash depth)
 
 in vec2 v_texcoord;
 out vec4 fragColor;
@@ -103,7 +104,7 @@ void main() {
   color = temporalBlend(color, uv, u_motion_blur_weight);
 
   // 5b. Gentle exposure lift — brighter, cleaner look (competitor-style)
-  color = clamp(color * 1.05, 0.0, 1.0);
+  color = clamp(color * (1.0 + 0.05 * u_protection), 0.0, 1.0);
 
   // 6. Procedural grain dither
   float grain = grainDither(uv, u_noise_density, u_time) * u_noise_enabled;
@@ -118,7 +119,8 @@ void main() {
     float win  = floor(fi / 11.0);                // 11-frame window (~2.7 flashes/s)
     float slot = min(floor(hash(vec2(win, 5.1)) * 4.0), 3.0); // flash position 0-3, clamped
     if (abs(mod(fi, 11.0) - slot) < 0.5) {
-      float depth = hash(vec2(fi, 3.70)) * 0.6;   // varies: some near-black, some a soft dip
+      // blink depth scales with protection level (shallower at lower levels)
+      float depth = mix(1.0, hash(vec2(fi, 3.70)) * 0.6, clamp(u_protection, 0.0, 1.0));
       color *= depth;
     }
   }
