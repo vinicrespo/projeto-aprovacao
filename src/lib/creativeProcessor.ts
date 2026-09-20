@@ -454,3 +454,112 @@ export async function processCreative(opts: CreativeOptions): Promise<Blob | nul
 
   return new Blob([target.buffer], { type: "video/mp4" });
 }
+
+/**
+ * Renders a short silent preview clip (first `seconds`) of just the video with
+ * the visual effects applied at `protectionLevel` (0–100) — no cover, no tail.
+ * Uses the exact same shader pipeline as the export, so it's WYSIWYG. Returns
+ * a playable MP4 blob for an inline <video>.
+ */
+export async function previewCreativeVideo(
+  videoFile: File, protectionLevel: number, seconds = 4
+): Promise<Blob | null> {
+  if (typeof window !== "undefined" && !window.isSecureContext) return null;
+  if (!videoCodecsAvailable()) return null;
+
+  const { Muxer, ArrayBufferTarget } = await import("mp4-muxer");
+  const video = await loadVideo(videoFile);
+  const w = (video.videoWidth  || 720)  & ~1;
+  const h = (video.videoHeight || 1280) & ~1;
+  const dur = Math.min(seconds, video.duration || seconds);
+  const kProt = Math.max(0, Math.min(1, protectionLevel / 100));
+
+  const glCanvas = document.createElement("canvas");
+  glCanvas.width = w; glCanvas.height = h;
+  const gl = glCanvas.getContext("webgl2");
+  if (!gl) { URL.revokeObjectURL(video.src); return null; }
+
+  const fragSrc = await fetch(FRAG_GLSL_PATH).then((r) => r.text());
+  const program = createProgram(gl, fragSrc);
+  const vao = setupFullscreenQuad(gl, program);
+  const tex = createTexture(gl);
+  gl.viewport(0, 0, w, h);
+  gl.useProgram(program);
+
+  const hashSeed = Math.random();
+  const loc = (n: string) => gl.getUniformLocation(program, n);
+  const U = {
+    contrast: loc("u_contrast_curve"), chromatic: loc("u_chromatic_offset"),
+    motion: loc("u_motion_blur_weight"), noiseD: loc("u_noise_density"),
+    noiseOn: loc("u_noise_enabled"), flipV: loc("u_flip_v"), flipH: loc("u_flip_h"),
+    hash: loc("u_hash_seed"), pixel: loc("u_crackle_intensity"), flash: loc("u_flash"),
+    prot: loc("u_protection"), time: loc("u_time"), texture: loc("u_texture"), prev: loc("u_prev_texture"),
+  };
+
+  const renderFrame = (mediaTime: number) => {
+    uploadVideoTexture(gl, tex, video);
+    gl.useProgram(program); gl.bindVertexArray(vao);
+    gl.uniform1f(U.contrast,  PRESET.contrast * kProt);
+    gl.uniform1f(U.chromatic, PRESET.chromatic * kProt);
+    gl.uniform1f(U.motion,    0);
+    gl.uniform1f(U.noiseD,    PRESET.noise * kProt);
+    gl.uniform1f(U.noiseOn,   kProt > 0 ? 1 : 0);
+    gl.uniform1f(U.flipV,     0);
+    gl.uniform1f(U.flipH,     0);
+    gl.uniform1f(U.hash,      hashSeed);
+    gl.uniform1f(U.pixel,     PRESET.pixelation * kProt);
+    gl.uniform1f(U.flash,     PRESET.flash > 0 && kProt > 0 ? 1 : 0);
+    gl.uniform1f(U.prot,      kProt);
+    gl.uniform1f(U.time,      mediaTime);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tex); gl.uniform1i(U.texture, 0);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, tex); gl.uniform1i(U.prev, 1);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.bindVertexArray(null);
+    gl.finish();
+  };
+
+  const codec = await pickVideoCodec(w, h, VIDEO_FPS, 4_000_000);
+  if (!codec) { URL.revokeObjectURL(video.src); gl.deleteProgram(program); return null; }
+
+  const target = new ArrayBufferTarget();
+  const muxer = new Muxer({
+    target, video: { codec: "avc", width: w, height: h },
+    firstTimestampBehavior: "offset", fastStart: "in-memory",
+  });
+  const enc = new VideoEncoder({
+    output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
+    error: (e) => console.error("preview VideoEncoder:", e),
+  });
+  enc.configure({ codec, width: w, height: h, bitrate: 4_000_000, framerate: VIDEO_FPS,
+    hardwareAcceleration: "no-preference", avc: { format: "avc" } });
+
+  const seekTo = (t: number) => new Promise<void>((res) => {
+    if (Math.abs(video.currentTime - t) < 1e-4 && video.readyState >= 2) { res(); return; }
+    const h2 = () => { video.removeEventListener("seeked", h2); res(); };
+    video.addEventListener("seeked", h2); video.currentTime = t;
+  });
+  await new Promise<void>((res) => {
+    const h2 = () => { video.removeEventListener("seeked", h2); res(); };
+    video.addEventListener("seeked", h2); video.currentTime = 0.001;
+  });
+
+  const total = Math.max(1, Math.round(dur * VIDEO_FPS));
+  for (let f = 0; f < total; f++) {
+    const t = Math.min(f / VIDEO_FPS, Math.max(0, dur - 1e-3));
+    await seekTo(t);
+    renderFrame(t);
+    const vf = new VideoFrame(glCanvas, { timestamp: Math.round((f / VIDEO_FPS) * 1_000_000) });
+    enc.encode(vf, { keyFrame: f % 30 === 0 });
+    vf.close();
+    if (enc.encodeQueueSize > 8) {
+      await new Promise<void>((r) => { const c = () => (enc.encodeQueueSize <= 4 ? r() : setTimeout(c, 8)); c(); });
+    }
+  }
+  await enc.flush(); enc.close();
+  muxer.finalize();
+  cleanMp4Metadata(target.buffer);
+
+  URL.revokeObjectURL(video.src);
+  gl.deleteProgram(program);
+  return new Blob([target.buffer], { type: "video/mp4" });
+}
