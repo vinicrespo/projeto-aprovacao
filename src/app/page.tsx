@@ -36,6 +36,7 @@ function App() {
   const [coverUrl, setCoverUrl] = useState<string | null>(null);
   const [endCoverFile, setEndCoverFile] = useState<File | null>(null);
   const [endCoverUrl, setEndCoverUrl] = useState<string | null>(null);
+  const [tailMinutes, setTailMinutes] = useState(5);
   const [videos, setVideos] = useState<VideoItem[]>([]);
 
   // Visual protection
@@ -141,6 +142,7 @@ function App() {
         const blob = await processCreative({
           coverFile,
           endCoverFile: endCoverFile ?? undefined,
+          outroSeconds: Math.round(tailMinutes * 60),
           protectionLevel,
           tvLines,
           audioProtection: audioOn ? { enabled: true, intensity: aIntensity, decoyFile, decoyGain, stereoCancel, noise } : undefined,
@@ -162,7 +164,7 @@ function App() {
     if (!cancelRef.current.cancelled && failures > 0) {
       alert(`${failures} de ${total} vídeo(s) falharam. Os demais estão em "Processados".`);
     }
-  }, [coverFile, endCoverFile, protectionLevel, tvLines, audioOn, aIntensity, decoyFile, decoyGain, stereoCancel, noise, videos, progress]);
+  }, [coverFile, endCoverFile, tailMinutes, protectionLevel, tvLines, audioOn, aIntensity, decoyFile, decoyGain, stereoCancel, noise, videos, progress]);
 
   const cancel = useCallback(() => { cancelRef.current.cancelled = true; setProgress(null); }, []);
 
@@ -221,6 +223,21 @@ function App() {
                 Remover imagem final
               </button>
             )}
+
+            <div className="mt-5 border-t border-white/5 pt-4">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-sm text-white/70">Duração da capa no final</span>
+                <span className="text-sm font-mono text-brand-400">
+                  {tailMinutes === 0 ? "sem capa" : `${tailMinutes} min`}
+                </span>
+              </div>
+              <input type="range" min={0} max={15} step={1} value={tailMinutes}
+                onChange={(e) => setTailMinutes(parseInt(e.target.value))}
+                disabled={progress !== null}
+                className="w-full accent-brand-500 cursor-pointer disabled:opacity-40" />
+              <div className="flex justify-between text-[10px] text-white/25 mt-1"><span>0</span><span>5</span><span>15 min</span></div>
+              <p className="text-[10px] text-white/25 mt-1">Quanto tempo a imagem fica parada depois que o vídeo acaba.</p>
+            </div>
           </StepCard>
 
           <StepCard step={3} title={`Vídeos${videos.length ? ` (${videos.length})` : ""}`} done={videos.length > 0}>
