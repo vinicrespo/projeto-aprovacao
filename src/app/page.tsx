@@ -3,13 +3,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { LoginScreen } from "@/components/LoginScreen";
 import { ExportModal } from "@/components/ExportModal";
 import { downloadBlob } from "@/lib/exporter";
-import { camouflagedFilename } from "@/lib/hashBuster";
 import { processCreative, previewCreativeVideo } from "@/lib/creativeProcessor";
-import { protectVideoAudio, previewProtectedAudio } from "@/lib/audioProtect";
+import { previewProtectedAudio } from "@/lib/audioProtect";
 
 export default function DashboardPage() {
-  // Auth is read after mount so server and first client render match (avoids
-  // a hydration mismatch for already-logged-in users).
   const [authed, setAuthed] = useState(false);
   const [ready, setReady] = useState(false);
   useEffect(() => {
@@ -22,13 +19,173 @@ export default function DashboardPage() {
 }
 
 interface VideoItem { id: string; file: File; url: string; }
-type Tab = "criativo" | "audio";
+
+// Minimal File System Access API typings (Chrome desktop)
+interface FSWritable { write(data: Blob): Promise<void>; close(): Promise<void>; }
+interface FSFileHandle { createWritable(): Promise<FSWritable>; }
+interface FSDirHandle { getFileHandle(name: string, o?: { create?: boolean }): Promise<FSFileHandle>; }
+
+function protectedName(original: string, used: Set<string>): string {
+  const base = original.replace(/\.[^.]+$/, "").replace(/[^\w.-]/g, "_") || "video";
+  let name = `${base}_protected.mp4`;
+  let i = 2;
+  while (used.has(name)) name = `${base}_protected_${i++}.mp4`;
+  used.add(name);
+  return name;
+}
 
 function App() {
-  const [tab, setTab] = useState<Tab>("criativo");
+  // Assets
+  const [coverFile, setCoverFile] = useState<File | null>(null);
+  const [coverUrl, setCoverUrl] = useState<string | null>(null);
+  const [endCoverFile, setEndCoverFile] = useState<File | null>(null);
+  const [endCoverUrl, setEndCoverUrl] = useState<string | null>(null);
+  const [videos, setVideos] = useState<VideoItem[]>([]);
+
+  // Visual protection
+  const [protectionLevel, setProtectionLevel] = useState(100);
+  const [tvLines, setTvLines] = useState(0);
+  const [vPreviewUrl, setVPreviewUrl] = useState<string | null>(null);
+  const [vPreviewing, setVPreviewing] = useState(false);
+
+  // Audio protection
+  const [audioOn, setAudioOn] = useState(false);
+  const [aIntensity, setAIntensity] = useState(60);
+  const [decoyFile, setDecoyFile] = useState<File | null>(null);
+  const [decoyGain, setDecoyGain] = useState(75);
+  const [stereoCancel, setStereoCancel] = useState(0);
+  const [noise, setNoise] = useState(0);
+  const [aPreviewUrl, setAPreviewUrl] = useState<string | null>(null);
+  const [aPreviewing, setAPreviewing] = useState(false);
+
+  // Run state
+  const [progress, setProgress] = useState<number | null>(null);
+  const [phase, setPhase] = useState("");
+  const cancelRef = useRef<{ cancelled: boolean }>({ cancelled: false });
+
+  // ── Uploads ──
+  const pickCover = useCallback((files: File[]) => {
+    const file = files[0]; if (!file) return;
+    if (!file.type.startsWith("image/")) { alert("A capa deve ser uma imagem (JPG, PNG…)."); return; }
+    setCoverFile(file);
+    setCoverUrl((p) => { if (p) URL.revokeObjectURL(p); return URL.createObjectURL(file); });
+  }, []);
+  const pickEndCover = useCallback((files: File[]) => {
+    const file = files[0]; if (!file) return;
+    if (!file.type.startsWith("image/")) { alert("A imagem final deve ser uma imagem."); return; }
+    setEndCoverFile(file);
+    setEndCoverUrl((p) => { if (p) URL.revokeObjectURL(p); return URL.createObjectURL(file); });
+  }, []);
+  const clearEndCover = useCallback(() => {
+    setEndCoverFile(null);
+    setEndCoverUrl((p) => { if (p) URL.revokeObjectURL(p); return null; });
+  }, []);
+  const pickDecoy = useCallback((files: File[]) => {
+    const file = files[0]; if (!file) return;
+    if (!file.type.startsWith("audio/")) { alert("O áudio isca deve ser um arquivo de áudio (MP3, WAV…)."); return; }
+    setDecoyFile(file);
+  }, []);
+  const addVideos = useCallback((files: File[]) => {
+    const vids = files.filter((f) => f.type.startsWith("video/"));
+    if (vids.length === 0) { alert("Envie vídeos (MP4, MOV…)."); return; }
+    setVideos((prev) => [
+      ...prev,
+      ...vids.map((file) => ({ id: `${file.name}-${file.size}-${Math.random().toString(36).slice(2, 8)}`, file, url: URL.createObjectURL(file) })),
+    ]);
+  }, []);
+  const removeVideo = useCallback((id: string) => {
+    setVideos((prev) => { const v = prev.find((x) => x.id === id); if (v) URL.revokeObjectURL(v.url); return prev.filter((x) => x.id !== id); });
+  }, []);
+
+  // ── Previews ──
+  const runVideoPreview = useCallback(async () => {
+    if (videos.length === 0 || vPreviewing || progress !== null) return;
+    setVPreviewing(true);
+    try {
+      const blob = await previewCreativeVideo(videos[0].file, protectionLevel, 5, tvLines);
+      if (!blob) { alert("Não foi possível gerar o preview (use o Chrome no desktop)."); return; }
+      setVPreviewUrl((p) => { if (p) URL.revokeObjectURL(p); return URL.createObjectURL(blob); });
+    } catch (e) { console.error(e); alert("Falha ao gerar o preview."); }
+    finally { setVPreviewing(false); }
+  }, [videos, protectionLevel, tvLines, vPreviewing, progress]);
+
+  const runAudioPreview = useCallback(async () => {
+    if (videos.length === 0 || aPreviewing || progress !== null) return;
+    setAPreviewing(true);
+    try {
+      const blob = await previewProtectedAudio(videos[0].file, aIntensity, 12, decoyFile, decoyGain, stereoCancel, noise);
+      if (!blob) { alert("Este vídeo não tem áudio para pré-visualizar."); return; }
+      setAPreviewUrl((p) => { if (p) URL.revokeObjectURL(p); return URL.createObjectURL(blob); });
+    } catch (e) { console.error(e); alert("Falha ao gerar o preview de áudio."); }
+    finally { setAPreviewing(false); }
+  }, [videos, aIntensity, decoyFile, decoyGain, stereoCancel, noise, aPreviewing, progress]);
+
+  const canProcess = coverFile && videos.length > 0 && progress === null;
+
+  // ── Batch process → save directly to a chosen folder ──
+  const handleProcess = useCallback(async () => {
+    if (!coverFile || videos.length === 0 || progress !== null) return;
+
+    // Ask for the output folder once (needs the click gesture). Fallback to downloads.
+    let dir: FSDirHandle | null = null;
+    const picker = (window as unknown as { showDirectoryPicker?: () => Promise<FSDirHandle> }).showDirectoryPicker;
+    if (picker) {
+      try { dir = await picker.call(window); }
+      catch { return; } // user cancelled the folder dialog
+    }
+
+    cancelRef.current = { cancelled: false };
+    const total = videos.length;
+    const used = new Set<string>();
+    let failures = 0;
+
+    for (let i = 0; i < total; i++) {
+      if (cancelRef.current.cancelled) break;
+      const item = videos[i];
+      const prefix = total > 1 ? `Vídeo ${i + 1}/${total} · ` : "";
+      setProgress(0);
+      setPhase(`${prefix}Iniciando…`);
+      try {
+        const blob = await processCreative({
+          coverFile,
+          endCoverFile: endCoverFile ?? undefined,
+          protectionLevel,
+          tvLines,
+          audioProtection: audioOn ? { enabled: true, intensity: aIntensity, decoyFile, decoyGain, stereoCancel, noise } : undefined,
+          videoFile: item.file,
+          onProgress: (r, p) => { setProgress(r); setPhase(`${prefix}${p}`); },
+          cancelRef: cancelRef.current,
+        });
+        if (blob && !cancelRef.current.cancelled) {
+          const name = protectedName(item.file.name, used);
+          if (dir) {
+            const fh = await dir.getFileHandle(name, { create: true });
+            const w = await fh.createWritable();
+            await w.write(blob); await w.close();
+          } else {
+            downloadBlob(blob, name);
+            await new Promise((res) => setTimeout(res, 800));
+          }
+        }
+      } catch (e) { console.error(`Falha no vídeo ${i + 1}:`, e); failures++; }
+    }
+
+    setProgress(null);
+    setPhase("");
+    if (!cancelRef.current.cancelled) {
+      if (failures > 0) alert(`${failures} de ${total} vídeo(s) falharam.${dir ? " Os demais foram salvos na pasta." : ""}`);
+      else if (dir) alert(`✅ ${total} vídeo(s) salvos na pasta selecionada.`);
+    }
+  }, [coverFile, endCoverFile, protectionLevel, tvLines, audioOn, aIntensity, decoyFile, decoyGain, stereoCancel, noise, videos, progress]);
+
+  const cancel = useCallback(() => { cancelRef.current.cancelled = true; setProgress(null); }, []);
+
+  const levelLabel = (v: number) => v === 0 ? "Desligada" : v < 35 ? "Leve" : v < 70 ? "Média" : "Forte";
+
   return (
     <div className="min-h-screen flex flex-col">
-      {/* Header */}
+      {progress !== null && <ExportModal progress={progress} done={false} onCancel={cancel} phaseLabel={phase} />}
+
       <header className="border-b border-white/5 px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-lg bg-brand-500 flex items-center justify-center">
@@ -45,492 +202,135 @@ function App() {
         </div>
       </header>
 
-      {/* Tab bar */}
-      <div className="border-b border-white/5 px-6 flex gap-1">
-        <TabButton active={tab === "criativo"} onClick={() => setTab("criativo")} label="Criativo" />
-        <TabButton active={tab === "audio"} onClick={() => setTab("audio")} label="Proteção de Áudio" />
-      </div>
+      <main className="flex-1 flex items-start justify-center p-6 overflow-y-auto">
+        <div className="w-full max-w-2xl flex flex-col gap-6 mt-4">
+          <div className="text-center">
+            <h2 className="text-lg font-semibold text-white">Processar Criativos</h2>
+            <p className="text-sm text-white/40 mt-1">
+              Suba a capa e os vídeos. Escolha proteção visual, de áudio, ou as duas. Cada arquivo é
+              salvo como <span className="text-white/60">nome_protected.mp4</span> na pasta que você escolher.
+            </p>
+          </div>
 
-      {tab === "criativo" ? <CreativeTab /> : <AudioProtectTab />}
+          <StepCard step={1} title="Capa inicial (abertura)" done={!!coverFile}>
+            <UploadSlot accept="image/*" onFiles={pickCover}
+              label={coverFile ? coverFile.name : "Clique ou arraste a imagem de abertura"}
+              preview={coverUrl ? <img src={coverUrl} alt="capa" className="h-full w-full object-cover" /> : null} tall />
+          </StepCard>
+
+          <StepCard step={2} title="Imagem final (opcional)" done={!!endCoverFile}>
+            <p className="text-[11px] text-white/35 mb-3">Fica nos 5 minutos após o vídeo. Sem ela, usa a capa inicial.</p>
+            <UploadSlot accept="image/*" onFiles={pickEndCover}
+              label={endCoverFile ? endCoverFile.name : "Clique ou arraste a imagem final (opcional)"}
+              preview={endCoverUrl ? <img src={endCoverUrl} alt="final" className="h-full w-full object-cover" /> : null} tall />
+            {endCoverFile && (
+              <button onClick={clearEndCover} disabled={progress !== null} className="mt-2 text-[11px] text-white/40 hover:text-red-400 disabled:opacity-30">
+                Remover imagem final
+              </button>
+            )}
+          </StepCard>
+
+          <StepCard step={3} title={`Vídeos${videos.length ? ` (${videos.length})` : ""}`} done={videos.length > 0}>
+            <VideoList videos={videos} onAdd={addVideos} onRemove={removeVideo} disabled={progress !== null} />
+          </StepCard>
+
+          {/* Visual protection */}
+          <StepCard step={4} title="Proteção visual" done={false}>
+            <Slider label="Intensidade geral" hint={levelLabel(protectionLevel)} value={protectionLevel} onChange={setProtectionLevel} disabled={progress !== null} lo="0 (limpo)" hi="100 (máximo)" />
+            <p className="text-[10px] text-white/25 mt-1 mb-4">Cor/contraste, cromático, pisca, grão e pixelado. Em 0 o vídeo fica igual (só troca o hash).</p>
+            <Slider label="Linhas de TV" hint={tvLines === 0 ? "Off" : levelLabel(tvLines)} value={tvLines} onChange={setTvLines} disabled={progress !== null} lo="0" hi="100" />
+            <p className="text-[10px] text-white/25 mt-1">Efeito de linhas horizontais tipo TV/CRT, com banda rolando lentamente.</p>
+
+            <div className="mt-4 flex flex-col gap-2">
+              <button onClick={runVideoPreview} disabled={videos.length === 0 || vPreviewing || progress !== null}
+                className="w-full py-2.5 rounded-lg bg-white/10 text-white/80 text-sm font-medium hover:bg-white/15 disabled:opacity-30 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+                {vPreviewing ? "Gerando preview…" : "Ver preview (5s do 1º vídeo)"}
+              </button>
+              {vPreviewUrl && <video src={vPreviewUrl} controls autoPlay loop muted className="w-full rounded-lg mt-1 bg-black" />}
+            </div>
+          </StepCard>
+
+          {/* Audio protection */}
+          <StepCard step={5} title="Proteção de áudio" done={audioOn}>
+            <div className="flex items-center justify-between">
+              <div>
+                <span className="text-sm text-white/80">Ativar proteção anti-transcrição</span>
+                <p className="text-[11px] text-white/35 mt-0.5">Blinda o áudio contra transcrição automática (robôs).</p>
+              </div>
+              <button onClick={() => setAudioOn((v) => !v)} disabled={progress !== null}
+                className={`relative w-11 h-6 rounded-full transition-colors disabled:opacity-40 ${audioOn ? "bg-brand-500" : "bg-white/10"}`}>
+                <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${audioOn ? "left-[22px]" : "left-0.5"}`} />
+              </button>
+            </div>
+
+            {audioOn && (
+              <div className="mt-4 flex flex-col gap-4 border-t border-white/5 pt-4">
+                <Slider label="Intensidade da blindagem" hint={levelLabel(aIntensity)} value={aIntensity} onChange={setAIntensity} disabled={progress !== null} lo="0" hi="100" />
+
+                <div>
+                  <p className="text-sm text-white/80 mb-2">Áudio isca / white (opcional)</p>
+                  <p className="text-[11px] text-white/35 mb-2">Fala limpa por baixo (ex.: receita.mp3) — a IA tende a transcrever a isca.</p>
+                  <UploadSlot accept="audio/*" onFiles={pickDecoy}
+                    label={decoyFile ? decoyFile.name : "Clique ou arraste o áudio isca"} preview={null} />
+                  {decoyFile && (
+                    <>
+                      <button onClick={() => setDecoyFile(null)} disabled={progress !== null} className="mt-2 text-[11px] text-white/40 hover:text-red-400 disabled:opacity-30">Remover isca</button>
+                      <div className="mt-3"><Slider label="Volume da isca" value={decoyGain} onChange={setDecoyGain} disabled={progress !== null} lo="0" hi="100" /></div>
+                      <div className="mt-3">
+                        <Slider label="Cancelamento estéreo" value={stereoCancel} onChange={setStereoCancel} disabled={progress !== null} lo="0 (normal)" hi="100 (some no mono)" />
+                        <p className="text-[10px] text-white/25 mt-1">Voz real em fase oposta → some quando a IA rebaixa pra mono. É o que mais engana o Whisper.</p>
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                <Slider label="Ruído de fundo" value={noise} onChange={setNoise} disabled={progress !== null} lo="0" hi="100" />
+
+                <div className="flex flex-col gap-2">
+                  <button onClick={runAudioPreview} disabled={videos.length === 0 || aPreviewing || progress !== null}
+                    className="w-full py-2.5 rounded-lg bg-white/10 text-white/80 text-sm font-medium hover:bg-white/15 disabled:opacity-30 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072M12 6.253v11.494m0 0L9 15m3 2.747L15 15M6.5 8.5a5 5 0 000 7" /></svg>
+                    {aPreviewing ? "Gerando preview…" : "Ouvir preview do áudio (12s)"}
+                  </button>
+                  {aPreviewUrl && <audio src={aPreviewUrl} controls autoPlay className="w-full mt-1" />}
+                  <p className="text-[10px] text-white/25 text-center">Teste no TurboScribe e ajuste. Fone/estéreo mantém a voz real audível.</p>
+                </div>
+              </div>
+            )}
+          </StepCard>
+
+          <button onClick={handleProcess} disabled={!canProcess}
+            className="w-full py-4 rounded-xl bg-brand-500 text-white font-semibold text-base hover:bg-brand-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2">
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+            {videos.length > 1 ? `Processar e salvar ${videos.length} vídeos` : "Processar e salvar"}
+          </button>
+          <p className="text-center text-[11px] text-white/25">
+            Ao processar, escolha a pasta uma vez — todos são salvos direto lá, sem pedir nome um por um.
+          </p>
+        </div>
+      </main>
     </div>
   );
 }
 
-function TabButton({ active, onClick, label }: { active: boolean; onClick: () => void; label: string }) {
+function Slider({ label, hint, value, onChange, disabled, lo, hi }: {
+  label: string; hint?: string; value: number; onChange: (v: number) => void; disabled: boolean; lo: string; hi: string;
+}) {
   return (
-    <button
-      onClick={onClick}
-      className={`px-4 py-3 text-sm font-medium border-b-2 -mb-px transition-colors ${
-        active ? "border-brand-500 text-white" : "border-transparent text-white/40 hover:text-white/70"
-      }`}
-    >
-      {label}
-    </button>
-  );
-}
-
-// ── Tab 1: Criativo (cover + video + 5-min tail) ─────────────────────────────
-function CreativeTab() {
-  const [coverFile, setCoverFile] = useState<File | null>(null);
-  const [coverUrl, setCoverUrl] = useState<string | null>(null);
-  const [endCoverFile, setEndCoverFile] = useState<File | null>(null);
-  const [endCoverUrl, setEndCoverUrl] = useState<string | null>(null);
-  const [videos, setVideos] = useState<VideoItem[]>([]);
-  const [protectionLevel, setProtectionLevel] = useState(100);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [previewing, setPreviewing] = useState(false);
-
-  const [progress, setProgress] = useState<number | null>(null);
-  const [phase, setPhase] = useState("");
-  const cancelRef = useRef<{ cancelled: boolean }>({ cancelled: false });
-
-  const runPreview = useCallback(async () => {
-    if (videos.length === 0 || previewing || progress !== null) return;
-    setPreviewing(true);
-    try {
-      const blob = await previewCreativeVideo(videos[0].file, protectionLevel, 5);
-      if (!blob) { alert("Não foi possível gerar o preview (use o Chrome no desktop)."); return; }
-      setPreviewUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return URL.createObjectURL(blob); });
-    } catch (e) {
-      console.error("Preview falhou:", e);
-      alert("Não foi possível gerar o preview.");
-    } finally {
-      setPreviewing(false);
-    }
-  }, [videos, protectionLevel, previewing, progress]);
-
-  const pickCover = useCallback((files: File[]) => {
-    const file = files[0];
-    if (!file) return;
-    if (!file.type.startsWith("image/")) { alert("A capa deve ser uma imagem (JPG, PNG…)."); return; }
-    setCoverFile(file);
-    setCoverUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return URL.createObjectURL(file); });
-  }, []);
-
-  const pickEndCover = useCallback((files: File[]) => {
-    const file = files[0];
-    if (!file) return;
-    if (!file.type.startsWith("image/")) { alert("A imagem final deve ser uma imagem (JPG, PNG…)."); return; }
-    setEndCoverFile(file);
-    setEndCoverUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return URL.createObjectURL(file); });
-  }, []);
-
-  const clearEndCover = useCallback(() => {
-    setEndCoverFile(null);
-    setEndCoverUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
-  }, []);
-
-  const addVideos = useCallback((files: File[]) => {
-    const vids = files.filter((f) => f.type.startsWith("video/"));
-    if (vids.length === 0) { alert("Envie vídeos (MP4, MOV…)."); return; }
-    setVideos((prev) => [
-      ...prev,
-      ...vids.map((file) => ({ id: `${file.name}-${file.size}-${Math.random().toString(36).slice(2, 8)}`, file, url: URL.createObjectURL(file) })),
-    ]);
-  }, []);
-
-  const removeVideo = useCallback((id: string) => {
-    setVideos((prev) => {
-      const v = prev.find((x) => x.id === id);
-      if (v) URL.revokeObjectURL(v.url);
-      return prev.filter((x) => x.id !== id);
-    });
-  }, []);
-
-  const canProcess = coverFile && videos.length > 0 && progress === null;
-
-  const handleProcess = useCallback(async () => {
-    if (!coverFile || videos.length === 0 || progress !== null) return;
-    cancelRef.current = { cancelled: false };
-    const total = videos.length;
-    let failures = 0;
-    for (let i = 0; i < total; i++) {
-      if (cancelRef.current.cancelled) break;
-      const item = videos[i];
-      const prefix = total > 1 ? `Vídeo ${i + 1}/${total} · ` : "";
-      setProgress(0);
-      setPhase(`${prefix}Iniciando…`);
-      try {
-        const blob = await processCreative({
-          coverFile,
-          endCoverFile: endCoverFile ?? undefined,
-          protectionLevel,
-          videoFile: item.file,
-          onProgress: (r, p) => { setProgress(r); setPhase(`${prefix}${p}`); },
-          cancelRef: cancelRef.current,
-        });
-        if (blob && !cancelRef.current.cancelled) {
-          downloadBlob(blob, camouflagedFilename());
-          await new Promise((res) => setTimeout(res, 800));
-        }
-      } catch (e) {
-        console.error(`Falha no vídeo ${i + 1}:`, e);
-        failures++;
-      }
-    }
-    setProgress(null);
-    setPhase("");
-    if (failures > 0 && !cancelRef.current.cancelled) {
-      alert(`${failures} de ${total} vídeo(s) falharam. Os demais foram baixados.`);
-    }
-  }, [coverFile, endCoverFile, protectionLevel, videos, progress]);
-
-  const cancel = useCallback(() => { cancelRef.current.cancelled = true; setProgress(null); }, []);
-
-  return (
-    <main className="flex-1 flex items-start justify-center p-6 overflow-y-auto">
-      {progress !== null && <ExportModal progress={progress} done={false} onCancel={cancel} phaseLabel={phase} />}
-      <div className="w-full max-w-2xl flex flex-col gap-6 mt-4">
-        <div className="text-center">
-          <h2 className="text-lg font-semibold text-white">Processar Criativos</h2>
-          <p className="text-sm text-white/40 mt-1">
-            Suba a capa (CTA) e um ou mais vídeos. Cada vídeo é processado e baixado individualmente.
-          </p>
-        </div>
-
-        <StepCard step={1} title="Capa inicial (abertura)" done={!!coverFile}>
-          <UploadSlot accept="image/*" onFiles={pickCover}
-            label={coverFile ? coverFile.name : "Clique ou arraste a imagem de abertura"}
-            preview={coverUrl ? <img src={coverUrl} alt="capa" className="h-full w-full object-cover" /> : null} tall />
-        </StepCard>
-
-        <StepCard step={2} title="Imagem final (opcional)" done={!!endCoverFile}>
-          <p className="text-[11px] text-white/35 mb-3">
-            Imagem que fica nos 5 minutos após o vídeo. Se não enviar, usa a capa inicial.
-          </p>
-          <UploadSlot accept="image/*" onFiles={pickEndCover}
-            label={endCoverFile ? endCoverFile.name : "Clique ou arraste a imagem final (opcional)"}
-            preview={endCoverUrl ? <img src={endCoverUrl} alt="imagem final" className="h-full w-full object-cover" /> : null} tall />
-          {endCoverFile && (
-            <button onClick={clearEndCover} disabled={progress !== null}
-              className="mt-2 text-[11px] text-white/40 hover:text-red-400 disabled:opacity-30">
-              Remover imagem final (usar a capa inicial)
-            </button>
-          )}
-        </StepCard>
-
-        <StepCard step={3} title={`Vídeos${videos.length ? ` (${videos.length})` : ""}`} done={videos.length > 0}>
-          <VideoList videos={videos} onAdd={addVideos} onRemove={removeVideo} disabled={progress !== null} />
-        </StepCard>
-
-        <StepCard step={4} title="Intensidade da proteção" done={false}>
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-sm text-white/70">
-              {protectionLevel === 0 ? "Desligada (só troca hash)" : protectionLevel < 35 ? "Leve" : protectionLevel < 70 ? "Média" : "Forte"}
-            </span>
-            <span className="text-sm font-mono text-brand-400">{protectionLevel}</span>
-          </div>
-          <input type="range" min={0} max={100} step={1} value={protectionLevel}
-            onChange={(e) => setProtectionLevel(parseInt(e.target.value))}
-            disabled={progress !== null}
-            className="w-full accent-brand-500 cursor-pointer disabled:opacity-40" />
-          <div className="flex justify-between text-[10px] text-white/25 mt-1">
-            <span>0 (limpo)</span><span>50</span><span>100 (máximo)</span>
-          </div>
-          <p className="text-[10px] text-white/25 mt-2">
-            Controla todos os efeitos de uma vez: cor/contraste, correção cromática, pisca, grão e
-            pixelado. Em 0, o vídeo fica visualmente igual ao original (só o hash é trocado).
-          </p>
-
-          <div className="mt-4 flex flex-col gap-2">
-            <button
-              onClick={runPreview}
-              disabled={videos.length === 0 || previewing || progress !== null}
-              className="w-full py-2.5 rounded-lg bg-white/10 text-white/80 text-sm font-medium
-                         hover:bg-white/15 disabled:opacity-30 disabled:cursor-not-allowed transition-colors
-                         flex items-center justify-center gap-2"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                  d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-              </svg>
-              {previewing ? "Gerando preview…" : "Ver preview (5s do 1º vídeo)"}
-            </button>
-            {previewUrl && (
-              <video src={previewUrl} controls autoPlay loop muted className="w-full rounded-lg mt-1 bg-black" />
-            )}
-            <p className="text-[10px] text-white/25 text-center">
-              Mostra a cor e o pisca no nível atual. Ajuste o slider e gere de novo.
-            </p>
-          </div>
-        </StepCard>
-
-        <button onClick={handleProcess} disabled={!canProcess}
-          className="w-full py-4 rounded-xl bg-brand-500 text-white font-semibold text-base
-                     hover:bg-brand-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2">
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-          </svg>
-          {videos.length > 1 ? `Processar ${videos.length} vídeos` : "Processar"}
-        </button>
-
-        <p className="text-center text-[11px] text-white/25">
-          Abertura 1s · vídeo com efeitos · capa segurada por 5 min no final · exporta MP4
-        </p>
+    <div>
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-sm text-white/70">{label}{hint ? <span className="text-white/40"> · {hint}</span> : null}</span>
+        <span className="text-sm font-mono text-brand-400">{value}</span>
       </div>
-    </main>
+      <input type="range" min={0} max={100} step={1} value={value}
+        onChange={(e) => onChange(parseInt(e.target.value))} disabled={disabled}
+        className="w-full accent-brand-500 cursor-pointer disabled:opacity-40" />
+      <div className="flex justify-between text-[10px] text-white/25 mt-1"><span>{lo}</span><span>{hi}</span></div>
+    </div>
   );
 }
 
-// ── Tab 2: Proteção de Áudio (anti-transcription) ────────────────────────────
-function AudioProtectTab() {
-  const [videos, setVideos] = useState<VideoItem[]>([]);
-  const [progress, setProgress] = useState<number | null>(null);
-  const [phase, setPhase] = useState("");
-  const [intensity, setIntensity] = useState(60);
-  const [decoyFile, setDecoyFile] = useState<File | null>(null);
-  const [decoyGain, setDecoyGain] = useState(75);
-  const [stereoCancel, setStereoCancel] = useState(0);
-  const [noise, setNoise] = useState(0);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [previewing, setPreviewing] = useState(false);
-  const cancelRef = useRef<{ cancelled: boolean }>({ cancelled: false });
-
-  const pickDecoy = useCallback((files: File[]) => {
-    const file = files[0];
-    if (!file) return;
-    if (!file.type.startsWith("audio/")) { alert("O áudio isca deve ser um arquivo de áudio (MP3, WAV, M4A…)."); return; }
-    setDecoyFile(file);
-  }, []);
-
-  const runPreview = useCallback(async () => {
-    if (videos.length === 0 || previewing) return;
-    setPreviewing(true);
-    try {
-      const blob = await previewProtectedAudio(videos[0].file, intensity, 12, decoyFile, decoyGain, stereoCancel, noise);
-      if (!blob) { alert("Este vídeo não tem áudio para pré-visualizar."); return; }
-      setPreviewUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return URL.createObjectURL(blob); });
-    } catch (e) {
-      console.error("Preview falhou:", e);
-      alert("Não foi possível gerar o preview.");
-    } finally {
-      setPreviewing(false);
-    }
-  }, [videos, intensity, decoyFile, decoyGain, stereoCancel, noise, previewing]);
-
-  const addVideos = useCallback((files: File[]) => {
-    const vids = files.filter((f) => f.type.startsWith("video/"));
-    if (vids.length === 0) { alert("Envie vídeos (MP4, MOV…)."); return; }
-    setVideos((prev) => [
-      ...prev,
-      ...vids.map((file) => ({ id: `${file.name}-${file.size}-${Math.random().toString(36).slice(2, 8)}`, file, url: URL.createObjectURL(file) })),
-    ]);
-  }, []);
-
-  const removeVideo = useCallback((id: string) => {
-    setVideos((prev) => {
-      const v = prev.find((x) => x.id === id);
-      if (v) URL.revokeObjectURL(v.url);
-      return prev.filter((x) => x.id !== id);
-    });
-  }, []);
-
-  const canProcess = videos.length > 0 && progress === null;
-
-  const handleProtect = useCallback(async () => {
-    if (videos.length === 0 || progress !== null) return;
-    cancelRef.current = { cancelled: false };
-    const total = videos.length;
-    let failures = 0;
-    for (let i = 0; i < total; i++) {
-      if (cancelRef.current.cancelled) break;
-      const item = videos[i];
-      const prefix = total > 1 ? `Vídeo ${i + 1}/${total} · ` : "";
-      setProgress(0);
-      setPhase(`${prefix}Iniciando…`);
-      try {
-        const blob = await protectVideoAudio({
-          videoFile: item.file,
-          intensity,
-          decoyFile: decoyFile ?? undefined,
-          decoyGain,
-          stereoCancel,
-          noise,
-          onProgress: (r, p) => { setProgress(r); setPhase(`${prefix}${p}`); },
-          cancelRef: cancelRef.current,
-        });
-        if (blob && !cancelRef.current.cancelled) {
-          downloadBlob(blob, camouflagedFilename());
-          await new Promise((res) => setTimeout(res, 800));
-        }
-      } catch (e) {
-        console.error(`Falha no vídeo ${i + 1}:`, e);
-        failures++;
-        if (total === 1) {
-          const msg = e instanceof Error && e.message ? e.message : "Falha ao proteger o áudio.";
-          alert(msg);
-        }
-      }
-    }
-    setProgress(null);
-    setPhase("");
-    if (failures > 0 && total > 1 && !cancelRef.current.cancelled) {
-      alert(`${failures} de ${total} vídeo(s) falharam. Os demais foram baixados.`);
-    }
-  }, [videos, progress, intensity, decoyFile, decoyGain, stereoCancel, noise]);
-
-  const cancel = useCallback(() => { cancelRef.current.cancelled = true; setProgress(null); }, []);
-
-  return (
-    <main className="flex-1 flex items-start justify-center p-6 overflow-y-auto">
-      {progress !== null && <ExportModal progress={progress} done={false} onCancel={cancel} phaseLabel={phase} />}
-      <div className="w-full max-w-2xl flex flex-col gap-6 mt-4">
-        <div className="text-center">
-          <h2 className="text-lg font-semibold text-white">Proteção de Áudio</h2>
-          <p className="text-sm text-white/40 mt-1">
-            Blindagem anti-transcrição extremamente agressiva. O vídeo é mantido; o áudio permanece
-            audível para humanos, mas a transcrição automática (robôs) sai embaralhada.
-          </p>
-        </div>
-
-        <div className="rounded-xl bg-amber-500/10 border border-amber-500/20 p-3">
-          <p className="text-[11px] text-amber-300/80 leading-relaxed">
-            ⚠️ Modo agressivo: o áudio soa "processado" (camadas concorrentes, warble e reverb).
-            Degrada fortemente transcritores automáticos, mas não força um texto específico — a eficácia
-            varia por sistema.
-          </p>
-        </div>
-
-        <StepCard step={1} title={`Vídeos${videos.length ? ` (${videos.length})` : ""}`} done={videos.length > 0}>
-          <VideoList videos={videos} onAdd={addVideos} onRemove={removeVideo} disabled={progress !== null} />
-        </StepCard>
-
-        {/* Decoy audio (white track) */}
-        <StepCard step={2} title="Áudio isca / white (opcional)" done={!!decoyFile}>
-          <p className="text-[11px] text-white/35 mb-3">
-            Faixa de fala limpa (ex.: <span className="text-white/50">receita.mp3</span>) que entra por baixo.
-            O áudio real fica degradado e a isca fica limpa — a ideia é que a transcrição automática
-            leia a isca. É repetida em loop pra cobrir o vídeo todo.
-          </p>
-          <UploadSlot accept="audio/*" onFiles={pickDecoy}
-            label={decoyFile ? decoyFile.name : "Clique ou arraste o áudio isca (MP3, WAV…)"}
-            preview={null} />
-          {decoyFile && (
-            <>
-              <button onClick={() => setDecoyFile(null)} disabled={progress !== null}
-                className="mt-2 text-[11px] text-white/40 hover:text-red-400 disabled:opacity-30">
-                Remover áudio isca
-              </button>
-              <div className="mt-4">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-sm text-white/70">Volume da isca</span>
-                  <span className="text-sm font-mono text-brand-400">{decoyGain}</span>
-                </div>
-                <input type="range" min={0} max={100} step={1} value={decoyGain}
-                  onChange={(e) => setDecoyGain(parseInt(e.target.value))}
-                  disabled={progress !== null}
-                  className="w-full accent-brand-500 cursor-pointer disabled:opacity-40" />
-                <div className="flex justify-between text-[10px] text-white/25 mt-1">
-                  <span>0 (baixa)</span><span>alta</span>
-                </div>
-                <p className="text-[10px] text-white/25 mt-1">
-                  Mais alto = mais chance da IA ler a isca, mas mais audível pro humano. Teste no preview.
-                </p>
-              </div>
-            </>
-          )}
-        </StepCard>
-
-        {/* Intensity + preview */}
-        <StepCard step={3} title="Intensidade da blindagem" done={false}>
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-sm text-white/70">
-              {intensity === 0 ? "Sem proteção" : intensity < 35 ? "Leve" : intensity < 70 ? "Média" : "Forte"}
-            </span>
-            <span className="text-sm font-mono text-brand-400">{intensity}</span>
-          </div>
-          <input
-            type="range" min={0} max={100} step={1} value={intensity}
-            onChange={(e) => setIntensity(parseInt(e.target.value))}
-            disabled={progress !== null}
-            className="w-full accent-brand-500 cursor-pointer disabled:opacity-40"
-          />
-          <div className="flex justify-between text-[10px] text-white/25 mt-1">
-            <span>0 (limpo)</span><span>50</span><span>100 (máximo)</span>
-          </div>
-          <p className="text-[10px] text-white/25 mt-1">
-            {decoyFile ? "Com isca: degrada o áudio real pra IA travar na isca limpa." : "Sem isca: embaralha a transcrição do áudio real."}
-          </p>
-
-          {/* Stereo cancel — only meaningful with a decoy */}
-          {decoyFile && (
-            <div className="mt-5">
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-sm text-white/70">Cancelamento estéreo</span>
-                <span className="text-sm font-mono text-brand-400">{stereoCancel}</span>
-              </div>
-              <input type="range" min={0} max={100} step={1} value={stereoCancel}
-                onChange={(e) => setStereoCancel(parseInt(e.target.value))}
-                disabled={progress !== null}
-                className="w-full accent-brand-500 cursor-pointer disabled:opacity-40" />
-              <div className="flex justify-between text-[10px] text-white/25 mt-1">
-                <span>0 (normal)</span><span>100 (voz some no mono)</span>
-              </div>
-              <p className="text-[10px] text-white/25 mt-1">
-                A voz real entra em fase oposta L/R → some quando a IA rebaixa pra mono (é o que
-                mais engana o Whisper). No fone/estéreo o humano ainda ouve. Em alto-falante mono a
-                voz real fica fraca — use ~70–90 e teste.
-              </p>
-            </div>
-          )}
-
-          {/* Noise floor */}
-          <div className="mt-5">
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-sm text-white/70">Ruído de fundo</span>
-              <span className="text-sm font-mono text-brand-400">{noise}</span>
-            </div>
-            <input type="range" min={0} max={100} step={1} value={noise}
-              onChange={(e) => setNoise(parseInt(e.target.value))}
-              disabled={progress !== null}
-              className="w-full accent-brand-500 cursor-pointer disabled:opacity-40" />
-            <div className="flex justify-between text-[10px] text-white/25 mt-1">
-              <span>0</span><span>100</span>
-            </div>
-          </div>
-
-          <div className="mt-5 flex flex-col gap-2">
-            <button
-              onClick={runPreview}
-              disabled={videos.length === 0 || progress !== null || previewing}
-              className="w-full py-2.5 rounded-lg bg-white/10 text-white/80 text-sm font-medium
-                         hover:bg-white/15 disabled:opacity-30 disabled:cursor-not-allowed transition-colors
-                         flex items-center justify-center gap-2"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                  d="M15.536 8.464a5 5 0 010 7.072M12 6.253v11.494m0 0L9 15m3 2.747L15 15M6.5 8.5a5 5 0 000 7" />
-              </svg>
-              {previewing ? "Gerando preview…" : "Ouvir preview (12s do 1º vídeo)"}
-            </button>
-            {previewUrl && (
-              <audio src={previewUrl} controls autoPlay className="w-full mt-1" />
-            )}
-            <p className="text-[10px] text-white/25 text-center">
-              Só o áudio muda — o vídeo é mantido. Ajuste o slider e ouça de novo.
-            </p>
-          </div>
-        </StepCard>
-
-        <button onClick={handleProtect} disabled={!canProcess}
-          className="w-full py-4 rounded-xl bg-brand-500 text-white font-semibold text-base
-                     hover:bg-brand-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2">
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-              d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-          </svg>
-          {videos.length > 1 ? `Blindar ${videos.length} vídeos` : "Blindar áudio"}
-        </button>
-
-        <p className="text-center text-[11px] text-white/25">
-          Só áudio · vídeo mantido · exporta MP4 · metadados limpos
-        </p>
-      </div>
-    </main>
-  );
-}
-
-// ── Shared UI ────────────────────────────────────────────────────────────────
 function VideoList({ videos, onAdd, onRemove, disabled }: {
   videos: VideoItem[]; onAdd: (f: File[]) => void; onRemove: (id: string) => void; disabled: boolean;
 }) {
@@ -544,10 +344,7 @@ function VideoList({ videos, onAdd, onRemove, disabled }: {
             <div key={v.id} className="flex items-center gap-3 rounded-lg bg-white/5 border border-white/8 p-2">
               <video src={v.url} muted className="w-14 h-14 rounded object-cover bg-black" />
               <span className="flex-1 text-xs text-white/70 truncate">{i + 1}. {v.file.name}</span>
-              <button onClick={() => onRemove(v.id)} disabled={disabled}
-                className="text-white/30 hover:text-red-400 disabled:opacity-30 text-lg px-2 leading-none" title="Remover">
-                ✕
-              </button>
+              <button onClick={() => onRemove(v.id)} disabled={disabled} className="text-white/30 hover:text-red-400 disabled:opacity-30 text-lg px-2 leading-none" title="Remover">✕</button>
             </div>
           ))}
         </div>
@@ -562,8 +359,7 @@ function StepCard({ step, title, done, children }: {
   return (
     <div className="rounded-2xl bg-white/3 border border-white/8 p-5">
       <div className="flex items-center gap-2 mb-3">
-        <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold
-          ${done ? "bg-emerald-500 text-white" : "bg-white/10 text-white/50"}`}>
+        <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${done ? "bg-emerald-500 text-white" : "bg-white/10 text-white/50"}`}>
           {done ? "✓" : step}
         </div>
         <h3 className="text-sm font-medium text-white">{title}</h3>
@@ -584,8 +380,7 @@ function UploadSlot({ accept, onFiles, label, preview, tall, multiple }: {
       onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
       onDragLeave={() => setDrag(false)}
       onDrop={(e) => { e.preventDefault(); setDrag(false); const fs = Array.from(e.dataTransfer.files); if (fs.length) onFiles(fs); }}
-      className={`relative rounded-xl border-2 border-dashed cursor-pointer overflow-hidden
-        transition-all ${tall ? "h-44" : "h-28"}
+      className={`relative rounded-xl border-2 border-dashed cursor-pointer overflow-hidden transition-all ${tall ? "h-44" : "h-28"}
         ${drag ? "border-brand-500 bg-brand-500/10" : "border-white/10 bg-white/3 hover:border-white/25"}`}
     >
       <input ref={inputRef} type="file" accept={accept} multiple={multiple} className="hidden"
@@ -598,10 +393,7 @@ function UploadSlot({ accept, onFiles, label, preview, tall, multiple }: {
         </>
       ) : (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-white/40">
-          <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-              d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-          </svg>
+          <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
           <span className="text-xs">{label}</span>
         </div>
       )}

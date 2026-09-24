@@ -1,11 +1,21 @@
 import { createProgram, setupFullscreenQuad, createTexture, uploadVideoTexture } from "@/lib/shaderLoader";
 import { cleanMp4Metadata } from "@/lib/mp4Metadata";
+import { buildProtectedAudioBuffer } from "@/lib/audioProtect";
 
 export interface CreativeOptions {
   coverFile: File;              // shown at the start (intro)
   videoFile: File;
   endCoverFile?: File;          // shown for the 5-min tail; falls back to coverFile
   protectionLevel?: number;     // 0–100 (default 100); scales all visual effects
+  tvLines?: number;             // 0–100 (default 0); TV scanline intensity
+  audioProtection?: {           // when enabled, obfuscates the video's audio
+    enabled: boolean;
+    intensity?: number;         // 0–100
+    decoyFile?: File | null;
+    decoyGain?: number;         // 0–100
+    stereoCancel?: number;      // 0–100
+    noise?: number;             // 0–100
+  };
   onProgress: (ratio: number, phase: string) => void;
   cancelRef: { cancelled: boolean };
   introSeconds?: number;  // override for testing; defaults to INTRO_SECONDS
@@ -208,12 +218,15 @@ export async function processCreative(opts: CreativeOptions): Promise<Blob | nul
   const uPixel      = loc("u_crackle_intensity");
   const uFlash      = loc("u_flash");
   const uProtection = loc("u_protection");
+  const uTvlines    = loc("u_tvlines");
+  const uResY       = loc("u_res_y");
   const uTime       = loc("u_time");
   const uTexture    = loc("u_texture");
   const uPrev       = loc("u_prev_texture");
 
   // Global protection level (0–1) scales every visual effect
   const kProt = Math.max(0, Math.min(1, (opts.protectionLevel ?? 100) / 100));
+  const kTv   = Math.max(0, Math.min(1, (opts.tvLines ?? 0) / 100));
 
   const renderVideoFrame = (mediaTime: number) => {
     uploadVideoTexture(gl, tex, video);
@@ -230,6 +243,8 @@ export async function processCreative(opts: CreativeOptions): Promise<Blob | nul
     gl.uniform1f(uPixel,     PRESET.pixelation * kProt);
     gl.uniform1f(uFlash,     PRESET.flash > 0 && kProt > 0 ? 1 : 0);
     gl.uniform1f(uProtection, kProt);
+    gl.uniform1f(uTvlines,   kTv);
+    gl.uniform1f(uResY,      h);
     gl.uniform1f(uTime,      mediaTime);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, tex);
@@ -256,7 +271,15 @@ export async function processCreative(opts: CreativeOptions): Promise<Blob | nul
   // Audio is optional — only if the WebCodecs audio API + a decodable track
   // exist AND the encoder actually accepts the (resampled) rate. If anything
   // is off, the creative is exported silent instead of failing the whole job.
-  let audioBuf = audioCodecsAvailable() ? await processAudio(videoFile) : null;
+  const ap = opts.audioProtection;
+  let audioBuf = audioCodecsAvailable()
+    ? (ap?.enabled
+        ? await buildProtectedAudioBuffer(videoFile, {
+            intensity: ap.intensity, decoyFile: ap.decoyFile, decoyGain: ap.decoyGain,
+            stereoCancel: ap.stereoCancel, noise: ap.noise,
+          })
+        : await processAudio(videoFile))
+    : null;
   const audioSampleRate = 48000; // processAudio always renders at 48000 Hz
   if (audioBuf) {
     try {
@@ -462,7 +485,7 @@ export async function processCreative(opts: CreativeOptions): Promise<Blob | nul
  * a playable MP4 blob for an inline <video>.
  */
 export async function previewCreativeVideo(
-  videoFile: File, protectionLevel: number, seconds = 4
+  videoFile: File, protectionLevel: number, seconds = 4, tvLines = 0
 ): Promise<Blob | null> {
   if (typeof window !== "undefined" && !window.isSecureContext) return null;
   if (!videoCodecsAvailable()) return null;
@@ -473,6 +496,7 @@ export async function previewCreativeVideo(
   const h = (video.videoHeight || 1280) & ~1;
   const dur = Math.min(seconds, video.duration || seconds);
   const kProt = Math.max(0, Math.min(1, protectionLevel / 100));
+  const kTv = Math.max(0, Math.min(1, tvLines / 100));
 
   const glCanvas = document.createElement("canvas");
   glCanvas.width = w; glCanvas.height = h;
@@ -493,7 +517,8 @@ export async function previewCreativeVideo(
     motion: loc("u_motion_blur_weight"), noiseD: loc("u_noise_density"),
     noiseOn: loc("u_noise_enabled"), flipV: loc("u_flip_v"), flipH: loc("u_flip_h"),
     hash: loc("u_hash_seed"), pixel: loc("u_crackle_intensity"), flash: loc("u_flash"),
-    prot: loc("u_protection"), time: loc("u_time"), texture: loc("u_texture"), prev: loc("u_prev_texture"),
+    prot: loc("u_protection"), tv: loc("u_tvlines"), resY: loc("u_res_y"),
+    time: loc("u_time"), texture: loc("u_texture"), prev: loc("u_prev_texture"),
   };
 
   const renderFrame = (mediaTime: number) => {
@@ -510,6 +535,8 @@ export async function previewCreativeVideo(
     gl.uniform1f(U.pixel,     PRESET.pixelation * kProt);
     gl.uniform1f(U.flash,     PRESET.flash > 0 && kProt > 0 ? 1 : 0);
     gl.uniform1f(U.prot,      kProt);
+    gl.uniform1f(U.tv,        kTv);
+    gl.uniform1f(U.resY,      h);
     gl.uniform1f(U.time,      mediaTime);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tex); gl.uniform1i(U.texture, 0);
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, tex); gl.uniform1i(U.prev, 1);

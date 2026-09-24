@@ -15,6 +15,8 @@ uniform float u_hash_seed;
 uniform float u_crackle_intensity; // pixelation: 0 = off, 1 = max
 uniform float u_flash;             // screen flicker/flash intensity: 0 = off, 1 = strong
 uniform float u_protection;        // global protection level 0..1 (scales exposure + flash depth)
+uniform float u_tvlines;           // TV scanline intensity 0..1
+uniform float u_res_y;             // output height in pixels (for crisp scanlines)
 
 in vec2 v_texcoord;
 out vec4 fragColor;
@@ -125,7 +127,16 @@ void main() {
     }
   }
 
-  // 8. Hash-bust noise
+  // 8. TV scanlines — CRT look. ~4px period so the lines survive H.264
+  //    compression (1px lines get blurred away by chroma/DCT). Intensity 0..1.
+  if (u_tvlines > 0.001) {
+    float lines = 0.5 + 0.5 * sin(v_texcoord.y * u_res_y * 1.5708); // 2π/4 → 4px period
+    float rolling = 0.5 + 0.5 * sin(v_texcoord.y * 3.0 + u_time * 3.0); // slow rolling band
+    float darken = u_tvlines * (0.55 * lines + 0.07 * rolling);
+    color *= 1.0 - darken;
+  }
+
+  // 9. Hash-bust noise
   vec2 hashUV = uv + vec2(u_hash_seed * 7.3, u_hash_seed * 3.7);
   float hashNoise = (noise(hashUV * 2048.0 + u_hash_seed * 100.0) * 2.0 - 1.0) * (1.5 / 255.0);
   color += hashNoise;

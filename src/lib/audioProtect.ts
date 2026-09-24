@@ -248,6 +248,26 @@ async function buildProtectedAudio(
   return renderProtected(decoded, { intensity, decoy, decoyGain, stereoCancel, noise });
 }
 
+/**
+ * Public helper: builds the protected AudioBuffer (48 kHz) for a video file,
+ * used by the creative pipeline when audio protection is enabled. All knobs
+ * are 0–100; decoyFile is optional. Returns null if there's no decodable audio.
+ */
+export async function buildProtectedAudioBuffer(
+  videoFile: File,
+  opts: { intensity?: number; decoyFile?: File | null; decoyGain?: number; stereoCancel?: number; noise?: number }
+): Promise<AudioBuffer | null> {
+  const decoy = opts.decoyFile ? await decodeFile(opts.decoyFile) : null;
+  return buildProtectedAudio(
+    videoFile,
+    (opts.intensity ?? 60) / 100,
+    decoy,
+    (opts.decoyGain ?? 75) / 100,
+    (opts.stereoCancel ?? 0) / 100,
+    (opts.noise ?? 0) / 100,
+  );
+}
+
 // Encode an AudioBuffer to a 16-bit PCM WAV Blob (for <audio> preview).
 function audioBufferToWav(buf: AudioBuffer): Blob {
   const numCh = Math.min(buf.numberOfChannels, 2);
