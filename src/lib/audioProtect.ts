@@ -14,6 +14,16 @@ export interface AudioProtectOptions {
 const VIDEO_FPS = 30;
 const OUT_RATE = 48000;
 
+// Drain via the encoder's ondequeue event (not throttled in background tabs).
+type Dequeuer = { encodeQueueSize: number; ondequeue: (() => void) | null };
+function drainEncoder(enc: VideoEncoder, hi = 30, lo = 15): Promise<void> {
+  const e = enc as unknown as Dequeuer;
+  if (e.encodeQueueSize <= hi) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    e.ondequeue = () => { if (e.encodeQueueSize <= lo) { e.ondequeue = null; resolve(); } };
+  });
+}
+
 // ── WebCodecs helpers (self-contained) ───────────────────────────────────────
 function videoCodecsAvailable(): boolean {
   return (
@@ -405,9 +415,7 @@ export async function protectVideoAudio(opts: AudioProtectOptions): Promise<Blob
     const vf = new VideoFrame(canvas, { timestamp: Math.round((f / VIDEO_FPS) * 1_000_000) });
     videoEncoder.encode(vf, { keyFrame: f % 60 === 0 });
     vf.close();
-    if (videoEncoder.encodeQueueSize > 8) {
-      await new Promise<void>((r) => { const c = () => (videoEncoder.encodeQueueSize <= 4 ? r() : setTimeout(c, 8)); c(); });
-    }
+    await drainEncoder(videoEncoder);
     if (f % 5 === 0) onProgress(0.08 + (f / totalFrames) * 0.72, "Reprocessando vídeo…");
   }
   if (cancelRef.cancelled) { videoEncoder.close(); return null; }

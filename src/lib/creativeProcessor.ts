@@ -41,6 +41,18 @@ const PRESET = {
 
 const FRAG_GLSL_PATH = "/standardization_frag.glsl";
 
+// Drain the encoder queue using the `ondequeue` event (NOT throttled in
+// background tabs, unlike setTimeout which is clamped to ~1s when hidden).
+// Larger thresholds let encoding overlap with frame capture for more speed.
+type Dequeuer = { encodeQueueSize: number; ondequeue: (() => void) | null };
+function drainEncoder(enc: VideoEncoder | AudioEncoder, hi = 30, lo = 15): Promise<void> {
+  const e = enc as unknown as Dequeuer;
+  if (e.encodeQueueSize <= hi) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    e.ondequeue = () => { if (e.encodeQueueSize <= lo) { e.ondequeue = null; resolve(); } };
+  });
+}
+
 // Video encoding is required; audio encoding is optional (falls back to silent)
 function videoCodecsAvailable(): boolean {
   return (
@@ -322,12 +334,7 @@ export async function processCreative(opts: CreativeOptions): Promise<Blob | nul
     videoEncoder.encode(vf, { keyFrame });
     vf.close();
     frameIndex++;
-    if (videoEncoder.encodeQueueSize > 8) {
-      await new Promise<void>((r) => {
-        const check = () => (videoEncoder.encodeQueueSize <= 4 ? r() : setTimeout(check, 8));
-        check();
-      });
-    }
+    await drainEncoder(videoEncoder);
   };
 
   // ── Phase 1: intro cover ────────────────────────────────────────────────────
@@ -375,13 +382,7 @@ export async function processCreative(opts: CreativeOptions): Promise<Blob | nul
     videoEncoder.encode(vf, { keyFrame: f % 60 === 0 });
     vf.close();
     frameIndex++;
-
-    if (videoEncoder.encodeQueueSize > 8) {
-      await new Promise<void>((r) => {
-        const check = () => (videoEncoder.encodeQueueSize <= 4 ? r() : setTimeout(check, 8));
-        check();
-      });
-    }
+    await drainEncoder(videoEncoder);
     if (f % 5 === 0) onProgress(0.08 + (f / totalVideoFrames) * 0.55, "Processando vídeo…");
   }
   if (cancelRef.cancelled) { videoEncoder.close(); return null; }
@@ -578,9 +579,7 @@ export async function previewCreativeVideo(
     const vf = new VideoFrame(glCanvas, { timestamp: Math.round((f / VIDEO_FPS) * 1_000_000) });
     enc.encode(vf, { keyFrame: f % 30 === 0 });
     vf.close();
-    if (enc.encodeQueueSize > 8) {
-      await new Promise<void>((r) => { const c = () => (enc.encodeQueueSize <= 4 ? r() : setTimeout(c, 8)); c(); });
-    }
+    await drainEncoder(enc);
   }
   await enc.flush(); enc.close();
   muxer.finalize();
