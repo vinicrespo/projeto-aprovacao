@@ -19,11 +19,7 @@ export default function DashboardPage() {
 }
 
 interface VideoItem { id: string; file: File; url: string; }
-
-// Minimal File System Access API typings (Chrome desktop)
-interface FSWritable { write(data: Blob): Promise<void>; close(): Promise<void>; }
-interface FSFileHandle { createWritable(): Promise<FSWritable>; }
-interface FSDirHandle { getFileHandle(name: string, o?: { create?: boolean }): Promise<FSFileHandle>; }
+interface ResultItem { id: string; name: string; url: string; size: number; }
 
 function protectedName(original: string, used: Set<string>): string {
   const base = original.replace(/\.[^.]+$/, "").replace(/[^\w.-]/g, "_") || "video";
@@ -61,6 +57,7 @@ function App() {
   // Run state
   const [progress, setProgress] = useState<number | null>(null);
   const [phase, setPhase] = useState("");
+  const [results, setResults] = useState<ResultItem[]>([]);
   const cancelRef = useRef<{ cancelled: boolean }>({ cancelled: false });
 
   // ── Uploads ──
@@ -126,13 +123,8 @@ function App() {
   const handleProcess = useCallback(async () => {
     if (!coverFile || videos.length === 0 || progress !== null) return;
 
-    // Ask for the output folder once (needs the click gesture). Fallback to downloads.
-    let dir: FSDirHandle | null = null;
-    const picker = (window as unknown as { showDirectoryPicker?: () => Promise<FSDirHandle> }).showDirectoryPicker;
-    if (picker) {
-      try { dir = await picker.call(window); }
-      catch { return; } // user cancelled the folder dialog
-    }
+    // Clear any previous batch's results (release their object URLs)
+    setResults((prev) => { prev.forEach((r) => URL.revokeObjectURL(r.url)); return []; });
 
     cancelRef.current = { cancelled: false };
     const total = videos.length;
@@ -142,7 +134,7 @@ function App() {
     for (let i = 0; i < total; i++) {
       if (cancelRef.current.cancelled) break;
       const item = videos[i];
-      const prefix = total > 1 ? `Vídeo ${i + 1}/${total} · ` : "";
+      const prefix = `Vídeo ${i + 1}/${total} · `;
       setProgress(0);
       setPhase(`${prefix}Iniciando…`);
       try {
@@ -158,27 +150,28 @@ function App() {
         });
         if (blob && !cancelRef.current.cancelled) {
           const name = protectedName(item.file.name, used);
-          if (dir) {
-            const fh = await dir.getFileHandle(name, { create: true });
-            const w = await fh.createWritable();
-            await w.write(blob); await w.close();
-          } else {
-            downloadBlob(blob, name);
-            await new Promise((res) => setTimeout(res, 800));
-          }
+          // Keep the finished file in the "Processados" list to download later
+          const url = URL.createObjectURL(blob);
+          setResults((prev) => [...prev, { id: item.id, name, url, size: blob.size }]);
         }
       } catch (e) { console.error(`Falha no vídeo ${i + 1}:`, e); failures++; }
     }
 
     setProgress(null);
     setPhase("");
-    if (!cancelRef.current.cancelled) {
-      if (failures > 0) alert(`${failures} de ${total} vídeo(s) falharam.${dir ? " Os demais foram salvos na pasta." : ""}`);
-      else if (dir) alert(`✅ ${total} vídeo(s) salvos na pasta selecionada.`);
+    if (!cancelRef.current.cancelled && failures > 0) {
+      alert(`${failures} de ${total} vídeo(s) falharam. Os demais estão em "Processados".`);
     }
   }, [coverFile, endCoverFile, protectionLevel, tvLines, audioOn, aIntensity, decoyFile, decoyGain, stereoCancel, noise, videos, progress]);
 
   const cancel = useCallback(() => { cancelRef.current.cancelled = true; setProgress(null); }, []);
+
+  const downloadAll = useCallback(async () => {
+    for (const r of results) {
+      downloadBlob(await fetch(r.url).then((x) => x.blob()), r.name);
+      await new Promise((res) => setTimeout(res, 500));
+    }
+  }, [results]);
 
   const levelLabel = (v: number) => v === 0 ? "Desligada" : v < 35 ? "Leve" : v < 70 ? "Média" : "Forte";
 
@@ -303,11 +296,46 @@ function App() {
           <button onClick={handleProcess} disabled={!canProcess}
             className="w-full py-4 rounded-xl bg-brand-500 text-white font-semibold text-base hover:bg-brand-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2">
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-            {videos.length > 1 ? `Processar e salvar ${videos.length} vídeos` : "Processar e salvar"}
+            {videos.length > 1 ? `Processar ${videos.length} vídeos` : "Processar"}
           </button>
           <p className="text-center text-[11px] text-white/25">
-            Ao processar, escolha a pasta uma vez — todos são salvos direto lá, sem pedir nome um por um.
+            Pode deixar rodando e sair. Quando terminar, os vídeos aparecem em “Processados” abaixo pra baixar.
           </p>
+
+          {/* Processed results — download when you come back */}
+          {results.length > 0 && (
+            <div className="rounded-2xl bg-white/3 border border-emerald-500/20 p-5">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-medium text-white flex items-center gap-2">
+                  <span className="w-5 h-5 rounded-full bg-emerald-500 text-white flex items-center justify-center text-xs">✓</span>
+                  Processados ({results.length}{progress !== null ? ` de ${videos.length}…` : ""})
+                </h3>
+                {results.length > 1 && (
+                  <button onClick={downloadAll} className="text-xs px-3 py-1.5 rounded-lg bg-brand-500 text-white font-medium hover:bg-brand-600 transition-colors">
+                    Baixar todos
+                  </button>
+                )}
+              </div>
+              <div className="flex flex-col gap-2">
+                {results.map((r) => (
+                  <div key={r.id} className="flex items-center gap-3 rounded-lg bg-white/5 border border-white/8 p-2">
+                    <video src={r.url} muted className="w-12 h-12 rounded object-cover bg-black" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs text-white/80 truncate">{r.name}</p>
+                      <p className="text-[10px] text-white/35">{(r.size / 1e6).toFixed(1)} MB</p>
+                    </div>
+                    <a href={r.url} download={r.name}
+                      className="text-xs px-3 py-1.5 rounded-lg bg-white/10 text-white/80 hover:bg-white/15 transition-colors">
+                      Baixar
+                    </a>
+                  </div>
+                ))}
+              </div>
+              <p className="text-[10px] text-white/25 mt-3">
+                Os arquivos ficam disponíveis enquanto esta aba estiver aberta. Baixe antes de fechar.
+              </p>
+            </div>
+          )}
         </div>
       </main>
     </div>
