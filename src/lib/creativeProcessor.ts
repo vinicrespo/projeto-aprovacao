@@ -26,7 +26,7 @@ export interface CreativeOptions {
 const INTRO_SECONDS = 1;      // cover shown briefly at the start
 const OUTRO_SECONDS = 300;    // cover held for 5 minutes at the end
 const VIDEO_FPS     = 30;
-const COVER_FPS     = 30;     // match video fps → whole file is constant-rate (CFR)
+const COVER_FPS     = 10;     // static cover → low fps (imperceptible) & ~3x faster encode
 
 // Baked-in effect preset applied to the video portion.
 // Tuned for a clean, natural, "competitor-style" look: gentle punch, almost
