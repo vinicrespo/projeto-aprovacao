@@ -105,9 +105,22 @@ function loadVideo(file: File): Promise<HTMLVideoElement> {
     const v = document.createElement("video");
     v.muted = true;
     v.playsInline = true;
+    v.preload = "auto";
     v.crossOrigin = "anonymous";
-    v.onloadedmetadata = () => res(v);
-    v.onerror = rej;
+    // Resolve only once real dimensions are known (videoWidth > 0), so we never
+    // fall back to a default size that would change the aspect ratio.
+    const ready = () => {
+      if (v.videoWidth > 0 && v.videoHeight > 0) { cleanup(); res(v); }
+    };
+    const cleanup = () => {
+      v.removeEventListener("loadedmetadata", ready);
+      v.removeEventListener("loadeddata", ready);
+      v.removeEventListener("resize", ready);
+    };
+    v.addEventListener("loadedmetadata", ready);
+    v.addEventListener("loadeddata", ready);
+    v.addEventListener("resize", ready);
+    v.onerror = () => { cleanup(); rej(new Error("Falha ao carregar o vídeo.")); };
     v.src = URL.createObjectURL(file);
   });
 }
