@@ -1,12 +1,13 @@
-import { Nav, Stat } from "@/components/ui";
+import { Shell } from "@/components/Shell";
+import { Stat } from "@/components/ui";
 import { BarChart } from "@/components/Chart";
-import Link from "next/link";
 import {
   getOffers, getEntries, getFixedExpenses, getGoal, getRecurring,
   sumEntries, byDay, fixedTotal,
 } from "@/lib/data";
-import { brl, monthKey } from "@/lib/format";
-import { createOffer, saveGoal, saveRecurring } from "@/lib/actions";
+import { brl, monthKey, monthLabel } from "@/lib/format";
+import { saveGoal, saveRecurring } from "@/lib/actions";
+import Link from "next/link";
 
 export const dynamic = "force-dynamic";
 
@@ -17,11 +18,11 @@ export default async function Dashboard({ searchParams }: { searchParams: { m?: 
   ]);
 
   const totals = sumEntries(entries);
-  const revenueTotal = totals.revenue + recurring;   // receita dos dias + recorrência
-  const grossProfit = revenueTotal - totals.spend;   // lucro bruto
+  const revenueTotal = totals.revenue + recurring;
+  const grossProfit = revenueTotal - totals.spend;
   const roi = totals.spend > 0 ? revenueTotal / totals.spend : 0;
   const fixedCost = fixedTotal(fixed);
-  const netProfit = grossProfit - fixedCost;         // lucro líquido (após despesas fixas)
+  const netProfit = grossProfit - fixedCost;
   const target = goal?.profit_target || 0;
   const distance = target - netProfit;
 
@@ -31,11 +32,13 @@ export default async function Dashboard({ searchParams }: { searchParams: { m?: 
   });
 
   return (
-    <>
-      <Nav />
-      <main className="max-w-6xl mx-auto px-4 py-6 space-y-6">
+    <Shell active="consolidado">
+      <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
         <div className="flex items-center justify-between flex-wrap gap-3">
-          <h1 className="text-2xl font-semibold">Consolidado — {month}</h1>
+          <div>
+            <div className="text-mut text-sm">Consolidado Geral</div>
+            <h1 className="text-2xl font-semibold">{monthLabel(month)}</h1>
+          </div>
           <form className="flex items-center gap-2">
             <input type="month" name="m" defaultValue={month} className="input w-44" />
             <button className="btn-ghost">Ver</button>
@@ -60,7 +63,10 @@ export default async function Dashboard({ searchParams }: { searchParams: { m?: 
           <input type="hidden" name="month" value={month} />
           <div className="flex-1 min-w-[220px]">
             <label className="label">Recorrência / receita variável do mês (todas as ofertas)</label>
-            <input type="number" step="0.01" name="amount" defaultValue={recurring} className="input" />
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-mut text-xs">R$</span>
+              <input type="number" step="0.01" name="amount" defaultValue={recurring} className="input pl-8" />
+            </div>
           </div>
           <button className="btn">Salvar recorrência</button>
           <p className="text-mut text-xs w-full">Valor geral, somado à receita consolidada. Flexível — atualize à vontade (chargeback, receita extra, etc).</p>
@@ -76,7 +82,10 @@ export default async function Dashboard({ searchParams }: { searchParams: { m?: 
         </section>
 
         <section className="space-y-3">
-          <h2 className="font-semibold">Ofertas</h2>
+          <div className="flex items-center justify-between">
+            <h2 className="font-semibold">Ofertas</h2>
+            <Link href="/nova-oferta" className="btn-ghost text-sm">+ Nova oferta</Link>
+          </div>
           <div className="grid md:grid-cols-2 gap-3">
             {perOffer.map(({ offer, spend, revenue, profit, roi }) => (
               <Link key={offer.id} href={`/ofertas/${offer.id}`} className="card hover:border-brand transition block">
@@ -92,32 +101,22 @@ export default async function Dashboard({ searchParams }: { searchParams: { m?: 
                 </div>
               </Link>
             ))}
-            {!offers.length && <p className="text-mut text-sm">Nenhuma oferta ainda. Crie a primeira abaixo.</p>}
+            {!offers.length && <p className="text-mut text-sm">Nenhuma oferta ainda. Crie a primeira no botão acima.</p>}
           </div>
         </section>
 
-        <section className="grid md:grid-cols-2 gap-3">
-          <form action={createOffer} className="card flex items-end gap-3">
-            <div className="flex-1">
-              <label className="label">Nova oferta</label>
-              <input name="name" placeholder="Nome da oferta" className="input" required />
+        <form action={saveGoal} className="card flex items-end gap-3 max-w-md">
+          <input type="hidden" name="month" value={month} />
+          <div className="flex-1">
+            <label className="label">Meta de lucro do mês</label>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-mut text-xs">R$</span>
+              <input type="number" step="0.01" name="profit_target" defaultValue={target} className="input pl-8" />
             </div>
-            <select name="status" className="input w-36">
-              <option value="rodando">rodando</option>
-              <option value="pausada">pausada</option>
-            </select>
-            <button className="btn">Criar</button>
-          </form>
-          <form action={saveGoal} className="card flex items-end gap-3">
-            <input type="hidden" name="month" value={month} />
-            <div className="flex-1">
-              <label className="label">Meta de lucro do mês</label>
-              <input type="number" step="0.01" name="profit_target" defaultValue={target} className="input" />
-            </div>
-            <button className="btn">Salvar meta</button>
-          </form>
-        </section>
-      </main>
-    </>
+          </div>
+          <button className="btn">Salvar meta</button>
+        </form>
+      </div>
+    </Shell>
   );
 }

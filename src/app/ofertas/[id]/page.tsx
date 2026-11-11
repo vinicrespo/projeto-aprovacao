@@ -1,10 +1,11 @@
-import { Nav, Stat } from "@/components/ui";
+import { Shell } from "@/components/Shell";
+import { Stat } from "@/components/ui";
 import { BarChart } from "@/components/Chart";
 import { EntryForm } from "@/components/EntryForm";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getOffer, getEntries, sumEntries, byDay } from "@/lib/data";
-import { brl, monthKey } from "@/lib/format";
+import { brl, monthKey, monthLabel } from "@/lib/format";
 import { updateOfferStatus, deleteEntry } from "@/lib/actions";
 
 export const dynamic = "force-dynamic";
@@ -20,25 +21,32 @@ export default async function OfferPage({
   const rows = [...entries].sort((a, b) => b.entry_date.localeCompare(a.entry_date));
 
   return (
-    <>
-      <Nav />
-      <main className="max-w-5xl mx-auto px-4 py-6 space-y-6">
+    <Shell active={offer.id}>
+      <div className="max-w-5xl mx-auto px-4 py-6 space-y-6">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
-            <Link href="/" className="text-mut text-sm hover:text-txt">← Consolidado</Link>
+            <div className="text-mut text-sm flex items-center gap-2">
+              <span>Oferta</span>·<span>{monthLabel(month)}</span>
+            </div>
             <h1 className="text-2xl font-semibold flex items-center gap-3">{offer.name}
-              <span className="text-xs px-2 py-0.5 rounded-full border border-line text-mut">{offer.status}</span>
+              <span className={`text-xs px-2 py-0.5 rounded-full border border-line ${offer.status === "rodando" ? "text-pos" : "text-mut"}`}>{offer.status}</span>
             </h1>
           </div>
-          <form action={updateOfferStatus} className="flex items-center gap-2">
-            <input type="hidden" name="id" value={offer.id} />
-            <select name="status" defaultValue={offer.status} className="input w-36">
-              <option value="rodando">rodando</option>
-              <option value="pausada">pausada</option>
-              <option value="encerrada">encerrada</option>
-            </select>
-            <button className="btn-ghost">Atualizar</button>
-          </form>
+          <div className="flex items-center gap-2">
+            <form className="flex items-center gap-2">
+              <input type="month" name="m" defaultValue={month} className="input w-40" />
+              <button className="btn-ghost">Ver</button>
+            </form>
+            <form action={updateOfferStatus} className="flex items-center gap-2">
+              <input type="hidden" name="id" value={offer.id} />
+              <select name="status" defaultValue={offer.status} className="input w-36">
+                <option value="rodando">rodando</option>
+                <option value="pausada">pausada</option>
+                <option value="encerrada">encerrada</option>
+              </select>
+              <button className="btn-ghost">Status</button>
+            </form>
+          </div>
         </div>
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -56,7 +64,7 @@ export default async function OfferPage({
         </section>
 
         <section className="card overflow-x-auto">
-          <h2 className="font-semibold mb-3">Lançamentos — {month}</h2>
+          <h2 className="font-semibold mb-3">Lançamentos — {monthLabel(month)}</h2>
           <table>
             <thead>
               <tr><th>Data</th><th>Gasto</th><th>Receita</th><th>Lucro</th><th>ROI</th><th></th></tr>
@@ -86,7 +94,7 @@ export default async function OfferPage({
             </tbody>
           </table>
         </section>
-      </main>
-    </>
+      </div>
+    </Shell>
   );
 }

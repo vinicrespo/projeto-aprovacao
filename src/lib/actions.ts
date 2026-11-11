@@ -101,3 +101,24 @@ export async function saveRecurring(formData: FormData) {
     .upsert({ month: `${month}-01`, amount }, { onConflict: "month" });
   revalidatePath("/");
 }
+
+export async function createOfferAndOpen(formData: FormData) {
+  const name = String(formData.get("name") || "").trim();
+  if (!name) redirect("/nova-oferta?e=1");
+  const status = String(formData.get("status") || "rodando");
+  const { data } = await db()
+    .from("offers")
+    .insert({ name, status, started_at: new Date().toISOString().slice(0, 10) })
+    .select("id")
+    .single();
+  revalidatePath("/");
+  redirect(data ? `/ofertas/${(data as { id: string }).id}` : "/");
+}
+
+export async function toggleFixedExpense(formData: FormData) {
+  const id = String(formData.get("id"));
+  const next = String(formData.get("next")) === "true";
+  await db().from("fixed_expenses").update({ active: next }).eq("id", id);
+  revalidatePath("/despesas");
+  revalidatePath("/");
+}

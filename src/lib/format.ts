@@ -17,3 +17,9 @@ export function todayISO() {
     d.getDate()
   ).padStart(2, "0")}`;
 }
+
+const MESES = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
+export function monthLabel(month: string) {
+  const [y, m] = month.split("-").map(Number);
+  return `${MESES[(m || 1) - 1]} de ${y}`;
+}
