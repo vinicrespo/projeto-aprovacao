@@ -2,42 +2,15 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --font-mono: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
-}
+:root { color-scheme: dark; }
+html, body { background: #0b0f14; color: #e6edf3; }
+body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
 
-* {
-  box-sizing: border-box;
-}
-
-html, body {
-  height: 100%;
-  background: #060d1a;
-  color: #f8fafc;
-  -webkit-font-smoothing: antialiased;
-}
-
-/* Custom range slider thumb */
-input[type="range"]::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: #4f6ef7;
-  cursor: pointer;
-  border: 2px solid #060d1a;
-  box-shadow: 0 0 0 1px #4f6ef7;
-}
-input[type="range"]::-moz-range-thumb {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: #4f6ef7;
-  cursor: pointer;
-  border: 2px solid #060d1a;
-}
-
-/* Scrollbar */
-::-webkit-scrollbar { width: 6px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+.card { @apply bg-panel border border-line rounded-xl p-4; }
+.input { @apply bg-panel2 border border-line rounded-lg px-3 py-2 text-txt outline-none focus:border-brand w-full; }
+.btn { @apply bg-brand text-white rounded-lg px-4 py-2 font-medium hover:opacity-90 transition; }
+.btn-ghost { @apply border border-line rounded-lg px-3 py-2 text-mut hover:text-txt hover:border-brand transition; }
+.label { @apply text-mut text-xs uppercase tracking-wide mb-1 block; }
+table { @apply w-full text-sm; }
+th { @apply text-mut text-xs uppercase tracking-wide text-left font-medium py-2 px-3 border-b border-line; }
+td { @apply py-2 px-3 border-b border-line/50; }

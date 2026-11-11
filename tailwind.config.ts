@@ -1,32 +1,21 @@
 import type { Config } from "tailwindcss";
-
 const config: Config = {
-  content: ["./src/**/*.{js,ts,jsx,tsx,mdx}"],
+  content: ["./src/**/*.{ts,tsx}"],
   theme: {
     extend: {
       colors: {
-        brand: {
-          50: "#f0f4ff",
-          100: "#e0eaff",
-          500: "#4f6ef7",
-          600: "#3b56e8",
-          700: "#2d42c8",
-          900: "#1a2680",
-        },
-        surface: {
-          50: "#f8fafc",
-          100: "#f1f5f9",
-          800: "#1e293b",
-          900: "#0f172a",
-          950: "#060d1a",
-        },
-      },
-      fontFamily: {
-        mono: ["var(--font-mono)", "ui-monospace", "monospace"],
+        bg: "#0b0f14",
+        panel: "#131a22",
+        panel2: "#1a232e",
+        line: "#243040",
+        txt: "#e6edf3",
+        mut: "#8b9bb0",
+        pos: "#2ecc71",
+        neg: "#ff5a5a",
+        brand: "#4c8bf5",
       },
     },
   },
   plugins: [],
 };
-
 export default config;
