@@ -2,6 +2,7 @@ import { Shell } from "@/components/Shell";
 import { Stat } from "@/components/ui";
 import { BarChart } from "@/components/Chart";
 import { EntryForm } from "@/components/EntryForm";
+import { MonthPicker } from "@/components/MonthPicker";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getOffer, getEntries, sumEntries, byDay } from "@/lib/data";
@@ -33,10 +34,7 @@ export default async function OfferPage({
             </h1>
           </div>
           <div className="flex items-center gap-2">
-            <form className="flex items-center gap-2">
-              <input type="month" name="m" defaultValue={month} className="input w-40" />
-              <button className="btn-ghost">Ver</button>
-            </form>
+            <MonthPicker month={month} />
             <form action={updateOfferStatus} className="flex items-center gap-2">
               <input type="hidden" name="id" value={offer.id} />
               <select name="status" defaultValue={offer.status} className="input w-36">

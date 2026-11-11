@@ -122,3 +122,24 @@ export async function toggleFixedExpense(formData: FormData) {
   revalidatePath("/despesas");
   revalidatePath("/");
 }
+
+export async function savePayment(formData: FormData) {
+  const paid_date = String(formData.get("paid_date"));
+  const amount = Number(formData.get("amount") || 0);
+  const source = String(formData.get("source") || "PJ");
+  const note = String(formData.get("note") || "") || null;
+  await db().from("invoice_payments").insert({ paid_date, amount, source, note });
+  revalidatePath("/fatura");
+}
+
+export async function deletePayment(formData: FormData) {
+  const id = String(formData.get("id"));
+  await db().from("invoice_payments").delete().eq("id", id);
+  revalidatePath("/fatura");
+}
+
+export async function saveCardLimit(formData: FormData) {
+  const num = Number(formData.get("num") || 0);
+  await db().from("app_settings").upsert({ key: "card_limit", num }, { onConflict: "key" });
+  revalidatePath("/fatura");
+}

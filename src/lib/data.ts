@@ -76,3 +76,22 @@ export async function getRecurring(month: string): Promise<number> {
     .maybeSingle();
   return data ? Number((data as { amount: number }).amount) : 0;
 }
+
+export type InvoicePayment = {
+  id: string; paid_date: string; amount: number; source: "PF" | "PJ" | "Outro"; note: string | null;
+};
+
+export async function getTotalSpendAllTime(): Promise<number> {
+  const { data } = await db().from("daily_entries").select("spend");
+  return (data || []).reduce((s, r) => s + Number((r as { spend: number }).spend), 0);
+}
+
+export async function getInvoicePayments(): Promise<InvoicePayment[]> {
+  const { data } = await db().from("invoice_payments").select("*").order("paid_date", { ascending: false });
+  return (data || []) as InvoicePayment[];
+}
+
+export async function getSetting(key: string): Promise<number> {
+  const { data } = await db().from("app_settings").select("num").eq("key", key).maybeSingle();
+  return data ? Number((data as { num: number }).num) : 0;
+}

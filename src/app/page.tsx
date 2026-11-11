@@ -1,6 +1,7 @@
 import { Shell } from "@/components/Shell";
 import { Stat } from "@/components/ui";
 import { BarChart } from "@/components/Chart";
+import { MonthPicker } from "@/components/MonthPicker";
 import {
   getOffers, getEntries, getFixedExpenses, getGoal, getRecurring,
   sumEntries, byDay, fixedTotal,
@@ -39,10 +40,7 @@ export default async function Dashboard({ searchParams }: { searchParams: { m?: 
             <div className="text-mut text-sm">Consolidado Geral</div>
             <h1 className="text-2xl font-semibold">{monthLabel(month)}</h1>
           </div>
-          <form className="flex items-center gap-2">
-            <input type="month" name="m" defaultValue={month} className="input w-44" />
-            <button className="btn-ghost">Ver</button>
-          </form>
+          <MonthPicker month={month} />
         </div>
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -64,8 +62,7 @@ export default async function Dashboard({ searchParams }: { searchParams: { m?: 
           <div className="flex-1 min-w-[220px]">
             <label className="label">Recorrência / receita variável do mês (todas as ofertas)</label>
             <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-mut text-xs">R$</span>
-              <input type="number" step="0.01" name="amount" defaultValue={recurring} className="input pl-8" />
+              <input type="number" step="0.01" name="amount" defaultValue={recurring} className="input" />
             </div>
           </div>
           <button className="btn">Salvar recorrência</button>
@@ -110,8 +107,7 @@ export default async function Dashboard({ searchParams }: { searchParams: { m?: 
           <div className="flex-1">
             <label className="label">Meta de lucro do mês</label>
             <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-mut text-xs">R$</span>
-              <input type="number" step="0.01" name="profit_target" defaultValue={target} className="input pl-8" />
+              <input type="number" step="0.01" name="profit_target" defaultValue={target} className="input" />
             </div>
           </div>
           <button className="btn">Salvar meta</button>

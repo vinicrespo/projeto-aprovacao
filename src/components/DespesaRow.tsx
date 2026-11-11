@@ -14,8 +14,7 @@ export function DespesaRow({ e }: { e: FixedExpense }) {
         <input type="hidden" name="active" value={e.active ? "true" : "false"} />
         <input name="name" defaultValue={e.name} className="input flex-1" />
         <div className="relative">
-          <span className="absolute left-2 top-1/2 -translate-y-1/2 text-mut text-xs">R$</span>
-          <input type="number" step="0.01" name="amount" defaultValue={Number(e.amount)} className="input w-28 pl-8" />
+          <input type="number" step="0.01" name="amount" defaultValue={Number(e.amount)} className="input w-28" />
         </div>
         <button className="btn-ghost text-xs">Salvar</button>
       </form>

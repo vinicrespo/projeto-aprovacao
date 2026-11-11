@@ -44,7 +44,10 @@ export async function Shell({
             + Nova oferta
           </Link>
 
-          <div className="pt-4">
+          <div className="pt-4 space-y-1">
+            <Link href="/fatura" className={`block px-3 py-2 rounded-lg border ${isActive("fatura")}`}>
+              🏦 Fatura (cartão)
+            </Link>
             <Link href="/despesas" className={`block px-3 py-2 rounded-lg border ${isActive("despesas")}`}>
               💳 Despesas fixas
             </Link>
