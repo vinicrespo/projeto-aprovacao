@@ -5,6 +5,7 @@ import { MonthPicker } from "@/components/MonthPicker";
 import {
   getOffers, getEntries, getFixedExpensesForMonth, getGoal, getRecurring,
   sumEntries, byDay, effectiveTotal, getSelectedMonth,
+  getVariableExpenses, variableTotal,
 } from "@/lib/data";
 import { brl, monthKey, monthLabel } from "@/lib/format";
 import { saveGoal, saveRecurring } from "@/lib/actions";
@@ -14,8 +15,8 @@ export const dynamic = "force-dynamic";
 
 export default async function Dashboard({ searchParams }: { searchParams: { m?: string } }) {
   const month = searchParams?.m || (await getSelectedMonth()) || monthKey();
-  const [offers, entries, fixed, goal, recurring] = await Promise.all([
-    getOffers(), getEntries(month), getFixedExpensesForMonth(month), getGoal(month), getRecurring(month),
+  const [offers, entries, fixed, goal, recurring, variaveis] = await Promise.all([
+    getOffers(), getEntries(month), getFixedExpensesForMonth(month), getGoal(month), getRecurring(month), getVariableExpenses(month),
   ]);
 
   const totals = sumEntries(entries);
@@ -23,7 +24,8 @@ export default async function Dashboard({ searchParams }: { searchParams: { m?: 
   const grossProfit = revenueTotal - totals.spend;
   const roi = totals.spend > 0 ? revenueTotal / totals.spend : 0;
   const fixedCost = effectiveTotal(fixed);
-  const netProfit = grossProfit - fixedCost;
+  const varCost = variableTotal(variaveis);
+  const netProfit = grossProfit - fixedCost - varCost;
   const target = goal?.profit_target || 0;
   const distance = target - netProfit;
 
@@ -51,10 +53,10 @@ export default async function Dashboard({ searchParams }: { searchParams: { m?: 
         </div>
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <Stat label="Despesas fixas" value={brl(fixedCost)} tone="neg" sub="mensalidades/ferramentas" />
-          <Stat label="Lucro líquido" value={brl(netProfit)} tone={netProfit >= 0 ? "pos" : "neg"} sub="lucro − despesas fixas" />
-          <Stat label="Meta de lucro" value={brl(target)} />
-          <Stat label="Distância da meta" value={brl(distance)} tone={distance <= 0 ? "pos" : "neutral"} sub={distance <= 0 ? "meta batida 🎉" : "falta pra meta"} />
+          <Stat label="Despesas fixas" value={brl(fixedCost)} tone="neg" sub="ferramentas do mês" />
+          <Stat label="Despesas variáveis" value={brl(varCost)} tone="neg" sub="BM, perfil, conta..." />
+          <Stat label="Lucro líquido" value={brl(netProfit)} tone={netProfit >= 0 ? "pos" : "neg"} sub="lucro − fixas − variáveis" />
+          <Stat label="Distância da meta" value={brl(distance)} tone={distance <= 0 ? "pos" : "neutral"} sub={distance <= 0 ? "meta batida 🎉" : `meta ${brl(target)}`} />
         </div>
 
         <form action={saveRecurring} className="card flex flex-wrap items-end gap-3">

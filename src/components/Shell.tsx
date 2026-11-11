@@ -49,7 +49,7 @@ export async function Shell({
               🏦 Fatura (cartão)
             </Link>
             <Link href="/despesas" className={`block px-3 py-2 rounded-lg border ${isActive("despesas")}`}>
-              💳 Despesas fixas
+              💳 Despesas
             </Link>
           </div>
         </nav>

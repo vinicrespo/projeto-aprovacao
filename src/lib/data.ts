@@ -124,3 +124,18 @@ export async function getSelectedMonth(): Promise<string | null> {
   const v = data ? (data as { txt: string | null }).txt : null;
   return v || null;
 }
+
+export type VariableExpense = { id: string; month: string; spent_date: string | null; description: string; amount: number };
+
+export async function getVariableExpenses(month: string): Promise<VariableExpense[]> {
+  const { data } = await db()
+    .from("variable_expenses")
+    .select("*")
+    .eq("month", `${month}-01`)
+    .order("spent_date", { ascending: true });
+  return (data || []) as VariableExpense[];
+}
+
+export function variableTotal(list: VariableExpense[]) {
+  return list.reduce((s, e) => s + Number(e.amount), 0);
+}

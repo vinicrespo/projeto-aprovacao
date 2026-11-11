@@ -190,3 +190,21 @@ export async function setSelectedMonth(formData: FormData) {
   revalidatePath("/despesas");
   redirect(m ? `${path}?m=${m}` : path);
 }
+
+export async function saveVariableExpense(formData: FormData) {
+  const month = String(formData.get("month"));
+  const description = String(formData.get("description") || "").trim();
+  const amount = Number(formData.get("amount") || 0);
+  const spent_date = String(formData.get("spent_date") || "") || null;
+  if (!description) return;
+  await db().from("variable_expenses").insert({ month: `${month}-01`, description, amount, spent_date });
+  revalidatePath("/despesas");
+  revalidatePath("/");
+}
+
+export async function deleteVariableExpense(formData: FormData) {
+  const id = String(formData.get("id"));
+  await db().from("variable_expenses").delete().eq("id", id);
+  revalidatePath("/despesas");
+  revalidatePath("/");
+}
