@@ -67,3 +67,12 @@ export function byDay(entries: DailyEntry[]) {
 export function fixedTotal(exp: FixedExpense[]) {
   return exp.filter((e) => e.active).reduce((s, e) => s + Number(e.amount), 0);
 }
+
+export async function getRecurring(month: string): Promise<number> {
+  const { data } = await db()
+    .from("recurring_revenue")
+    .select("amount")
+    .eq("month", `${month}-01`)
+    .maybeSingle();
+  return data ? Number((data as { amount: number }).amount) : 0;
+}

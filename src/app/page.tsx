@@ -2,23 +2,26 @@ import { Nav, Stat } from "@/components/ui";
 import { BarChart } from "@/components/Chart";
 import Link from "next/link";
 import {
-  getOffers, getEntries, getFixedExpenses, getGoal,
+  getOffers, getEntries, getFixedExpenses, getGoal, getRecurring,
   sumEntries, byDay, fixedTotal,
 } from "@/lib/data";
 import { brl, monthKey } from "@/lib/format";
-import { createOffer, saveGoal } from "@/lib/actions";
+import { createOffer, saveGoal, saveRecurring } from "@/lib/actions";
 
 export const dynamic = "force-dynamic";
 
 export default async function Dashboard({ searchParams }: { searchParams: { m?: string } }) {
   const month = searchParams?.m || monthKey();
-  const [offers, entries, fixed, goal] = await Promise.all([
-    getOffers(), getEntries(month), getFixedExpenses(), getGoal(month),
+  const [offers, entries, fixed, goal, recurring] = await Promise.all([
+    getOffers(), getEntries(month), getFixedExpenses(), getGoal(month), getRecurring(month),
   ]);
 
   const totals = sumEntries(entries);
+  const revenueTotal = totals.revenue + recurring;   // receita dos dias + recorrência
+  const grossProfit = revenueTotal - totals.spend;   // lucro bruto
+  const roi = totals.spend > 0 ? revenueTotal / totals.spend : 0;
   const fixedCost = fixedTotal(fixed);
-  const netProfit = totals.profit - fixedCost; // lucro após despesas fixas
+  const netProfit = grossProfit - fixedCost;         // lucro líquido (após despesas fixas)
   const target = goal?.profit_target || 0;
   const distance = target - netProfit;
 
@@ -41,9 +44,9 @@ export default async function Dashboard({ searchParams }: { searchParams: { m?: 
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <Stat label="Gasto (tráfego)" value={brl(totals.spend)} tone="neg" />
-          <Stat label="Receita" value={brl(totals.revenue)} tone="pos" />
-          <Stat label="Lucro bruto" value={brl(totals.profit)} tone={totals.profit >= 0 ? "pos" : "neg"} sub="receita − gasto" />
-          <Stat label="ROI" value={totals.roi.toFixed(2) + "x"} sub="receita / gasto" />
+          <Stat label="Receita total" value={brl(revenueTotal)} tone="pos" sub={`dias ${brl(totals.revenue)} + recorrência ${brl(recurring)}`} />
+          <Stat label="Lucro bruto" value={brl(grossProfit)} tone={grossProfit >= 0 ? "pos" : "neg"} sub="receita − gasto" />
+          <Stat label="ROI" value={roi.toFixed(2) + "x"} sub="receita / gasto" />
         </div>
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -53,19 +56,27 @@ export default async function Dashboard({ searchParams }: { searchParams: { m?: 
           <Stat label="Distância da meta" value={brl(distance)} tone={distance <= 0 ? "pos" : "neutral"} sub={distance <= 0 ? "meta batida 🎉" : "falta pra meta"} />
         </div>
 
+        <form action={saveRecurring} className="card flex flex-wrap items-end gap-3">
+          <input type="hidden" name="month" value={month} />
+          <div className="flex-1 min-w-[220px]">
+            <label className="label">Recorrência / receita variável do mês (todas as ofertas)</label>
+            <input type="number" step="0.01" name="amount" defaultValue={recurring} className="input" />
+          </div>
+          <button className="btn">Salvar recorrência</button>
+          <p className="text-mut text-xs w-full">Valor geral, somado à receita consolidada. Flexível — atualize à vontade (chargeback, receita extra, etc).</p>
+        </form>
+
         <section className="card">
           <h2 className="font-semibold mb-3">Gasto × Receita por dia (todas as ofertas)</h2>
           <BarChart data={byDay(entries)} />
           <div className="flex gap-4 text-xs text-mut mt-1">
             <span className="flex items-center gap-1"><span className="w-3 h-3 bg-neg/70 inline-block rounded-sm" /> Gasto</span>
-            <span className="flex items-center gap-1"><span className="w-3 h-3 bg-pos/70 inline-block rounded-sm" /> Receita</span>
+            <span className="flex items-center gap-1"><span className="w-3 h-3 bg-pos/70 inline-block rounded-sm" /> Receita (dos dias)</span>
           </div>
         </section>
 
         <section className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="font-semibold">Ofertas</h2>
-          </div>
+          <h2 className="font-semibold">Ofertas</h2>
           <div className="grid md:grid-cols-2 gap-3">
             {perOffer.map(({ offer, spend, revenue, profit, roi }) => (
               <Link key={offer.id} href={`/ofertas/${offer.id}`} className="card hover:border-brand transition block">

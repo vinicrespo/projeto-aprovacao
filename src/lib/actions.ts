@@ -92,3 +92,12 @@ export async function saveGoal(formData: FormData) {
     .upsert({ month: `${month}-01`, profit_target }, { onConflict: "month" });
   revalidatePath("/");
 }
+
+export async function saveRecurring(formData: FormData) {
+  const month = String(formData.get("month")); // YYYY-MM
+  const amount = Number(formData.get("amount") || 0);
+  await db()
+    .from("recurring_revenue")
+    .upsert({ month: `${month}-01`, amount }, { onConflict: "month" });
+  revalidatePath("/");
+}
