@@ -126,7 +126,7 @@ export async function toggleFixedExpense(formData: FormData) {
 export async function savePayment(formData: FormData) {
   const paid_date = String(formData.get("paid_date"));
   const amount = Number(formData.get("amount") || 0);
-  const source = String(formData.get("source") || "PJ");
+  const source = String(formData.get("source") || "Inter");
   const note = String(formData.get("note") || "") || null;
   await db().from("invoice_payments").insert({ paid_date, amount, source, note });
   revalidatePath("/fatura");

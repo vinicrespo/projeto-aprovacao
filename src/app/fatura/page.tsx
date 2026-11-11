@@ -21,8 +21,9 @@ export default async function FaturaPage() {
     <Shell active="fatura">
       <div className="max-w-4xl mx-auto px-4 py-6 space-y-6">
         <div>
-          <div className="text-mut text-sm">Cartão de crédito</div>
+          <div className="text-mut text-sm">Cartão de crédito — Itaú (PF)</div>
           <h1 className="text-2xl font-semibold">Fatura</h1>
+          <p className="text-mut text-sm mt-1">Registre cada pagamento da fatura e de qual conta saiu o dinheiro (Inter pessoal ou Conta Simples PJ).</p>
         </div>
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -61,10 +62,10 @@ export default async function FaturaPage() {
             </div>
             <div className="flex gap-2">
               <div className="flex-1">
-                <label className="label">Conta que pagou</label>
-                <select name="source" className="input">
-                  <option value="PJ">PJ (empresa)</option>
-                  <option value="PF">PF (pessoal)</option>
+                <label className="label">De qual conta saiu</label>
+                <select name="source" className="input" defaultValue="Inter">
+                  <option value="Inter">Inter (pessoal)</option>
+                  <option value="Conta Simples">Conta Simples (PJ)</option>
                   <option value="Outro">Outro</option>
                 </select>
               </div>
@@ -87,9 +88,9 @@ export default async function FaturaPage() {
               <button className="btn-ghost">Salvar</button>
             </form>
             <div className="card">
-              <div className="label">Abatido por conta</div>
-              <div className="flex justify-between py-1 text-sm"><span>PJ (empresa)</span><span className="text-pos">{brl(porOrigem("PJ"))}</span></div>
-              <div className="flex justify-between py-1 text-sm"><span>PF (pessoal)</span><span className="text-pos">{brl(porOrigem("PF"))}</span></div>
+              <div className="label">Pago por conta</div>
+              <div className="flex justify-between py-1 text-sm"><span>Inter (pessoal)</span><span className="text-pos">{brl(porOrigem("Inter"))}</span></div>
+              <div className="flex justify-between py-1 text-sm"><span>Conta Simples (PJ)</span><span className="text-pos">{brl(porOrigem("Conta Simples"))}</span></div>
               <div className="flex justify-between py-1 text-sm border-t border-line mt-1 pt-1"><span className="text-mut">Outro</span><span>{brl(porOrigem("Outro"))}</span></div>
             </div>
           </div>
