@@ -3,8 +3,8 @@ import { Stat } from "@/components/ui";
 import { BarChart } from "@/components/Chart";
 import { MonthPicker } from "@/components/MonthPicker";
 import {
-  getOffers, getEntries, getFixedExpenses, getGoal, getRecurring,
-  sumEntries, byDay, fixedTotal,
+  getOffers, getEntries, getFixedExpensesForMonth, getGoal, getRecurring,
+  sumEntries, byDay, effectiveTotal, getSelectedMonth,
 } from "@/lib/data";
 import { brl, monthKey, monthLabel } from "@/lib/format";
 import { saveGoal, saveRecurring } from "@/lib/actions";
@@ -13,16 +13,16 @@ import Link from "next/link";
 export const dynamic = "force-dynamic";
 
 export default async function Dashboard({ searchParams }: { searchParams: { m?: string } }) {
-  const month = searchParams?.m || monthKey();
+  const month = searchParams?.m || (await getSelectedMonth()) || monthKey();
   const [offers, entries, fixed, goal, recurring] = await Promise.all([
-    getOffers(), getEntries(month), getFixedExpenses(), getGoal(month), getRecurring(month),
+    getOffers(), getEntries(month), getFixedExpensesForMonth(month), getGoal(month), getRecurring(month),
   ]);
 
   const totals = sumEntries(entries);
   const revenueTotal = totals.revenue + recurring;
   const grossProfit = revenueTotal - totals.spend;
   const roi = totals.spend > 0 ? revenueTotal / totals.spend : 0;
-  const fixedCost = fixedTotal(fixed);
+  const fixedCost = effectiveTotal(fixed);
   const netProfit = grossProfit - fixedCost;
   const target = goal?.profit_target || 0;
   const distance = target - netProfit;
@@ -40,7 +40,7 @@ export default async function Dashboard({ searchParams }: { searchParams: { m?: 
             <div className="text-mut text-sm">Consolidado Geral</div>
             <h1 className="text-2xl font-semibold">{monthLabel(month)}</h1>
           </div>
-          <MonthPicker month={month} />
+          <MonthPicker month={month} path="/" />
         </div>
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

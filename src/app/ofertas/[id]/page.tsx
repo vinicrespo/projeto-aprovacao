@@ -34,7 +34,7 @@ export default async function OfferPage({
             </h1>
           </div>
           <div className="flex items-center gap-2">
-            <MonthPicker month={month} />
+            <MonthPicker month={month} path={`/ofertas/${offer.id}`} />
             <form action={updateOfferStatus} className="flex items-center gap-2">
               <input type="hidden" name="id" value={offer.id} />
               <select name="status" defaultValue={offer.status} className="input w-36">

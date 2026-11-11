@@ -143,3 +143,50 @@ export async function saveCardLimit(formData: FormData) {
   await db().from("app_settings").upsert({ key: "card_limit", num }, { onConflict: "key" });
   revalidatePath("/fatura");
 }
+
+async function upsertExpenseMonth(expense_id: string, month: string, patch: Record<string, unknown>) {
+  const client = db();
+  const { data } = await client
+    .from("fixed_expense_months")
+    .select("id")
+    .eq("expense_id", expense_id)
+    .eq("month", `${month}-01`)
+    .maybeSingle();
+  if (data) {
+    await client.from("fixed_expense_months").update(patch).eq("id", (data as { id: string }).id);
+  } else {
+    await client.from("fixed_expense_months").insert({ expense_id, month: `${month}-01`, ...patch });
+  }
+}
+
+export async function toggleExpenseMonth(formData: FormData) {
+  const id = String(formData.get("id"));
+  const month = String(formData.get("month"));
+  const next = String(formData.get("next")) === "true";
+  await upsertExpenseMonth(id, month, { active: next });
+  revalidatePath("/despesas");
+  revalidatePath("/");
+}
+
+export async function saveExpenseRow(formData: FormData) {
+  const id = String(formData.get("id"));
+  const month = String(formData.get("month"));
+  const name = String(formData.get("name") || "").trim();
+  const amount = Number(formData.get("amount") || 0);
+  // nome é global (catálogo); valor é por mês
+  if (name) await db().from("fixed_expenses").update({ name }).eq("id", id);
+  await upsertExpenseMonth(id, month, { amount });
+  revalidatePath("/despesas");
+  revalidatePath("/");
+}
+
+export async function setSelectedMonth(formData: FormData) {
+  const m = String(formData.get("m") || "");
+  const path = String(formData.get("path") || "/");
+  if (m) {
+    await db().from("app_settings").upsert({ key: "sel_month", txt: m, num: 0 }, { onConflict: "key" });
+  }
+  revalidatePath("/");
+  revalidatePath("/despesas");
+  redirect(m ? `${path}?m=${m}` : path);
+}

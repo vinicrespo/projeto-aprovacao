@@ -95,3 +95,32 @@ export async function getSetting(key: string): Promise<number> {
   const { data } = await db().from("app_settings").select("num").eq("key", key).maybeSingle();
   return data ? Number((data as { num: number }).num) : 0;
 }
+
+export type EffectiveExpense = { id: string; name: string; amount: number; active: boolean };
+
+export async function getFixedExpensesForMonth(month: string): Promise<EffectiveExpense[]> {
+  const [cat, over] = await Promise.all([
+    db().from("fixed_expenses").select("*").order("name"),
+    db().from("fixed_expense_months").select("*").eq("month", `${month}-01`),
+  ]);
+  const overrides = (over.data || []) as { expense_id: string; active: boolean | null; amount: number | null }[];
+  return ((cat.data || []) as FixedExpense[]).map((c) => {
+    const o = overrides.find((x) => x.expense_id === c.id);
+    return {
+      id: c.id,
+      name: c.name,
+      amount: o && o.amount != null ? Number(o.amount) : Number(c.amount),
+      active: o && o.active != null ? o.active : c.active,
+    };
+  });
+}
+
+export function effectiveTotal(list: EffectiveExpense[]) {
+  return list.filter((e) => e.active).reduce((s, e) => s + Number(e.amount), 0);
+}
+
+export async function getSelectedMonth(): Promise<string | null> {
+  const { data } = await db().from("app_settings").select("txt").eq("key", "sel_month").maybeSingle();
+  const v = data ? (data as { txt: string | null }).txt : null;
+  return v || null;
+}
