@@ -34,6 +34,16 @@ export async function createOffer(formData: FormData) {
   revalidatePath("/");
 }
 
+export async function deleteOffer(formData: FormData) {
+  const id = String(formData.get("id"));
+  if (!id) return;
+  // apaga os lançamentos da oferta e depois a oferta
+  await db().from("daily_entries").delete().eq("offer_id", id);
+  await db().from("offers").delete().eq("id", id);
+  revalidatePath("/");
+  redirect("/");
+}
+
 export async function updateOfferStatus(formData: FormData) {
   const id = String(formData.get("id"));
   const status = String(formData.get("status"));

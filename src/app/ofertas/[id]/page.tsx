@@ -8,6 +8,7 @@ import { notFound } from "next/navigation";
 import { getOffer, getEntries, sumEntries, byDay } from "@/lib/data";
 import { brl, monthKey, monthLabel } from "@/lib/format";
 import { updateOfferStatus, deleteEntry } from "@/lib/actions";
+import { DeleteOfferButton } from "@/components/DeleteOfferButton";
 
 export const dynamic = "force-dynamic";
 
@@ -92,6 +93,10 @@ export default async function OfferPage({
             </tbody>
           </table>
         </section>
+
+        <div className="flex justify-end pt-2">
+          <DeleteOfferButton id={offer.id} name={offer.name} />
+        </div>
       </div>
     </Shell>
   );
