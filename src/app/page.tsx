@@ -5,9 +5,9 @@ import { MonthPicker } from "@/components/MonthPicker";
 import {
   getOffers, getEntries, getFixedExpensesForMonth, getGoal, getRecurring,
   sumEntries, byDay, effectiveTotal, getSelectedMonth,
-  getVariableExpenses, variableTotal,
+  getVariableExpenses, variableTotal, getEntriesSince,
 } from "@/lib/data";
-import { brl, monthKey, monthLabel } from "@/lib/format";
+import { brl, monthKey, monthLabel, todayISO } from "@/lib/format";
 import { saveGoal, saveRecurring } from "@/lib/actions";
 import Link from "next/link";
 
@@ -15,8 +15,13 @@ export const dynamic = "force-dynamic";
 
 export default async function Dashboard({ searchParams }: { searchParams: { m?: string } }) {
   const month = searchParams?.m || (await getSelectedMonth()) || monthKey();
-  const [offers, entries, fixed, goal, recurring, variaveis] = await Promise.all([
-    getOffers(), getEntries(month), getFixedExpensesForMonth(month), getGoal(month), getRecurring(month), getVariableExpenses(month),
+  // últimos 7 dias (data corrida, independente do mês selecionado)
+  const start7 = (() => {
+    const d = new Date(); d.setDate(d.getDate() - 6);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  })();
+  const [offers, entries, fixed, goal, recurring, variaveis, last7] = await Promise.all([
+    getOffers(), getEntries(month), getFixedExpensesForMonth(month), getGoal(month), getRecurring(month), getVariableExpenses(month), getEntriesSince(start7),
   ]);
 
   const totals = sumEntries(entries);
@@ -31,7 +36,10 @@ export default async function Dashboard({ searchParams }: { searchParams: { m?: 
 
   const perOffer = offers.map((o) => {
     const t = sumEntries(entries.filter((e) => e.offer_id === o.id));
-    return { offer: o, ...t };
+    const e7 = last7.filter((e) => e.offer_id === o.id);
+    const t7 = sumEntries(e7);
+    const lastDate = e7.length ? e7.map((e) => e.entry_date).sort().slice(-1)[0] : null;
+    return { offer: o, ...t, t7, lastDate };
   });
 
   return (
@@ -86,20 +94,40 @@ export default async function Dashboard({ searchParams }: { searchParams: { m?: 
             <Link href="/nova-oferta" className="btn-ghost text-sm">+ Nova oferta</Link>
           </div>
           <div className="grid md:grid-cols-2 gap-3">
-            {perOffer.map(({ offer, spend, revenue, profit, roi }) => (
+            {perOffer.map(({ offer, spend, revenue, profit, roi, t7, lastDate }) => {
+              const hoje = todayISO();
+              const ontem = (() => { const d = new Date(); d.setDate(d.getDate() - 1); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; })();
+              const lancouHoje = lastDate === hoje;
+              const lancouOntem = lastDate === ontem;
+              return (
               <Link key={offer.id} href={`/ofertas/${offer.id}`} className="card hover:border-brand transition block">
                 <div className="flex items-center justify-between">
                   <span className="font-medium">{offer.name}</span>
                   <span className={`text-xs px-2 py-0.5 rounded-full border border-line ${offer.status === "rodando" ? "text-pos" : "text-mut"}`}>{offer.status}</span>
                 </div>
-                <div className="grid grid-cols-4 gap-2 mt-3 text-sm">
-                  <div><div className="label">Gasto</div>{brl(spend)}</div>
+                <div className="grid grid-cols-4 gap-2 mt-3 text-sm [&>div]:whitespace-nowrap">
+                  <div><div className="label">Gasto (mês)</div>{brl(spend)}</div>
                   <div><div className="label">Receita</div>{brl(revenue)}</div>
                   <div className={profit >= 0 ? "text-pos" : "text-neg"}><div className="label">Lucro</div>{brl(profit)}</div>
                   <div><div className="label">ROI</div>{roi.toFixed(2)}x</div>
                 </div>
+                <div className="mt-3 pt-3 border-t border-line">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[11px] uppercase tracking-wide text-mut">Últimos 7 dias</span>
+                    <span className={`text-[11px] ${lancouHoje ? "text-pos" : lancouOntem ? "text-brand" : "text-mut"}`}>
+                      {lastDate ? `último: ${lastDate.split("-").reverse().slice(0,2).join("/")}${lancouHoje ? " (hoje)" : lancouOntem ? " (ontem)" : ""}` : "sem lançamento"}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-4 gap-2 text-sm [&>div]:whitespace-nowrap">
+                    <div><div className="label">Gasto</div>{brl(t7.spend)}</div>
+                    <div><div className="label">Receita</div>{brl(t7.revenue)}</div>
+                    <div className={t7.profit >= 0 ? "text-pos" : "text-neg"}><div className="label">Lucro</div>{brl(t7.profit)}</div>
+                    <div><div className="label">ROI</div>{t7.roi.toFixed(2)}x</div>
+                  </div>
+                </div>
               </Link>
-            ))}
+              );
+            })}
             {!offers.length && <p className="text-mut text-sm">Nenhuma oferta ainda. Crie a primeira no botão acima.</p>}
           </div>
         </section>

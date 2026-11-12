@@ -139,3 +139,13 @@ export async function getVariableExpenses(month: string): Promise<VariableExpens
 export function variableTotal(list: VariableExpense[]) {
   return list.reduce((s, e) => s + Number(e.amount), 0);
 }
+
+export async function getEntriesSince(startISO: string): Promise<DailyEntry[]> {
+  const { data, error } = await db()
+    .from("daily_entries")
+    .select("*")
+    .gte("entry_date", startISO)
+    .order("entry_date");
+  if (error) throw error;
+  return data as DailyEntry[];
+}
